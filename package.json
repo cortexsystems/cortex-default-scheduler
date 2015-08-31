@@ -4,15 +4,15 @@
   "description": "Default scheduler for Cortex applications",
   "author": "Hamza Kaya",
   "email": "help@cortexpowered.com",
-  "license": "",
+  "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/network-os/titan-pilot.git"
+    "url": "git+https://github.com/cortexsystems/cortex-default-scheduler.git"
   },
   "bugs": {
-    "url": "https://github.com/network-os/titan-pilot/issues"
+    "url": "https://github.com/cortexsystems/cortex-default-scheduler/issues"
   },
-  "homepage": "https://github.com/network-os/titan-pilot#readme",
+  "homepage": "https://github.com/cortexsystems/cortex-default-scheduler#readme",
   "main": "src/index.js",
   "scripts": {
     "test": "gulp test"
@@ -34,5 +34,8 @@
   },
   "dependencies": {
     "promise": "^7.0.4"
+  },
+  "directories": {
+    "test": "test"
   }
 }
