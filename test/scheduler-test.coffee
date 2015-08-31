@@ -163,7 +163,6 @@ describe 'Scheduler', ->
         @scheduler._runStep()
 
       ta = sinon.stub @scheduler, '_tryApp', (app) ->
-        console.log "Trying app #{app}"
         new promise (resolve, reject) -> reject()
 
       @scheduler._strategy = [
