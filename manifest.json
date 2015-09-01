@@ -1,7 +1,7 @@
 {
     "name": "com.cortexpowered.scheduler.default",
     "version": "1.0.0",
-    "label": "Cortex Default Scheduler",
+    "displayName": "Cortex Default Scheduler",
     "author": "Cortex Systems, LLC",
     "email": "support@cortexpowered.com",
     "homepage": "http://www.cortexpowered.com",
