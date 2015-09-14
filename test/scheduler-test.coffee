@@ -10,21 +10,81 @@ describe 'Scheduler', ->
     @render = sinon.stub()
     @showHide = sinon.stub()
     @prepare = sinon.stub()
+    @trackView = sinon.stub()
     @api =
       scheduler:
         render:   @render
         prepare:  @prepare
         showHide: @showHide
+        trackView: @trackView
+    @clock = sinon.useFakeTimers()
     @scheduler = new DefaultScheduler()
     @scheduler._api = @api
 
-  describe '#_runStep', ->
+  afterEach ->
+    @clock.restore()
+
+  describe '#_onHealthCheck', ->
+    it 'should succeed during the warmup period', ->
+      report = sinon.stub()
+      @scheduler._onHealthCheck report
+      expect(report).to.have.been.calledOnce
+      expect(report).to.have.been.calledWith status: true
+      report.reset()
+
+      @clock.tick 5000
+      @scheduler._onHealthCheck report
+      expect(report).to.have.been.calledOnce
+      expect(report).to.have.been.calledWith status: true
+
+    it 'should fail when there have been no run calls', ->
+      rs = sinon.stub @scheduler, '_runStep', ->
+      # warm up
+      @clock.tick 60000
+      @scheduler._strategy = [['a']]
+      @scheduler._run()
+      @clock.tick 200000
+
+      report = sinon.stub()
+      @scheduler._onHealthCheck report
+      expect(report).to.have.been.calledOnce
+      expect(report).to.have.been.calledWith
+        status: false
+        reason: 'Scheduler has stopped working.'
+
+    it 'should fail when there have been no successful renders', ->
+      # warm up
+      @clock.tick 500000
+      now = new Date().getTime()
+      @scheduler._lastRunTime = now
+      @scheduler._lastSuccessfulRunTime = now - 300000
+
+      report = sinon.stub()
+      @scheduler._onHealthCheck report
+      expect(report).to.have.been.calledOnce
+      expect(report).to.have.been.calledWith
+        status: false
+        reason: "Scheduler hasn't rendered any content for too long."
+
+    it 'should succeed when everything is alright', ->
+      @clock.tick = 500000
+      now = new Date().getTime()
+      @scheduler._lastRunTime = now
+      @scheduler._lastSuccessfulRunTime = now
+
+      report = sinon.stub()
+      @scheduler._onHealthCheck report
+      expect(report).to.have.been.calledOnce
+      expect(report).to.have.been.calledWith status: true
+
+  describe '#_run', ->
     it 'should throw when strategy is invalid', ->
       expect(@scheduler._strategy).to.not.be.ok
-      expect(=> @scheduler._runStep()).to.throw
+      expect(=> @scheduler._run()).to.throw
       @scheduler._strategy = []
-      expect(=> @scheduler._runStep()).to.throw
+      expect(=> @scheduler._run()).to.throw
 
+  describe '#_runStep', ->
     it 'should try an app of a priority', ->
       @scheduler._priorityIndex = 1
       @scheduler._appIndex = 0
@@ -139,9 +199,35 @@ describe 'Scheduler', ->
           expect(tp).to.have.been.calledWith 1, 1
           expect(@scheduler._priorityIndex).to.equal 2
           expect(@scheduler._appIndex).to.equal 0
-          process.nextTick ->
+          process.nextTick =>
+            expect(@trackView).to.not.have.been.called
             expect(run).to.have.been.calledOnce
             done()
+
+    it 'should sleep for a while and notify the user when all priority levels \
+        fail', (done) ->
+      @scheduler._priorityIndex = 2
+      @scheduler._appIndex = 1
+      run = sinon.stub @scheduler, '_run', ->
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        new promise (resolve, reject) -> reject()
+      @scheduler._strategy = [
+        ['a', 'b', 'c'],
+        ['d', 'e', 'f'],
+        ['e']
+      ]
+      @scheduler._runStep()
+        .catch (e) =>
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 2, 1
+          expect(@scheduler._priorityIndex).to.equal 3
+          expect(@scheduler._appIndex).to.equal 0
+          expect(@trackView).to.have.been.calledOnce
+          expect(@trackView).to.have.been.calledWith '__bs'
+          expect(run).to.not.have.been.called
+          @clock.tick 1000
+          expect(run).to.have.been.calledOnce
+          done()
 
   describe '#_run', ->
     it 'should try all apps in priority order when everything fails', (done) ->
@@ -161,6 +247,8 @@ describe 'Scheduler', ->
           return
 
         @scheduler._runStep()
+          .catch (e) =>
+            @clock.tick 1000
 
       ta = sinon.stub @scheduler, '_tryApp', (app) ->
         new promise (resolve, reject) -> reject()
@@ -355,12 +443,15 @@ describe 'Scheduler', ->
       @render.returns new promise (resolve, reject) -> resolve()
       view =
         viewId: 'view-id'
+        contentLabel: 'label'
       @scheduler._render 'app1', view
         .then =>
           expect(@showHide).to.have.been.calledOnce
           expect(@showHide).to.have.been.calledWith 'app1', 'app2'
           expect(@render).to.have.been.calledOnce
           expect(@render).to.have.been.calledWith 'app1', 'view-id'
+          expect(@trackView).to.have.been.calledOnce
+          expect(@trackView).to.have.been.calledWith 'app1', 'label'
           expect(@scheduler._currentApp).to.equal 'app1'
           done()
 
@@ -475,46 +566,86 @@ describe 'Scheduler', ->
           __default: []
           other: []
 
-    it 'should call prepare() for a new view after a discard', ->
-      prepare = sinon.stub @scheduler, '_prepare'
-      view =
-        viewId: 'view-id'
-        contentId: '__default'
-      @scheduler._queues =
-        app:
-          __default: [view]
-      @scheduler._discardView 'app', view
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: []
-      expect(prepare).to.have.been.calledOnce
-      expect(prepare).to.have.been.calledWith 'app'
-
   describe '#_prepareApps', ->
     it 'should call prepare() BUFFERED_VIEWS_PER_APP times for each app', ->
       prepare = sinon.stub @scheduler, '_prepare'
       @scheduler._apps =
-        'app1': true
-        'app2': true
-        'app3': true
+        app1: true
+        app2: true
+        app3: true
+      @scheduler._activePrepareCalls =
+        app1: 0
+        app2: 0
+        app3: 0
 
       @scheduler._prepareApps()
       expect(prepare).to.have.callCount 3 * 5
 
+    it 'should make less prepare() calls when there are active calls', ->
+      prepare = sinon.stub @scheduler, '_prepare'
+      @scheduler._apps =
+        app1: true
+        app2: true
+        app3: true
+      @scheduler._activePrepareCalls =
+        app1: 0
+        app2: 3
+        app3: 5
+
+      @scheduler._prepareApps()
+      # 5x app1, 2x app2
+      expect(prepare).to.have.callCount 7
+
+    it 'should make less prepare() calls when queues are not empty', ->
+      prepare = sinon.stub @scheduler, '_prepare'
+      @scheduler._apps =
+        app1: true
+        app2: true
+        app3: true
+      @scheduler._activePrepareCalls =
+        app1: 0
+        app2: 3
+        app3: 3
+      @scheduler._queues =
+        app1:
+          __default: ['a', 'b']
+        app2:
+          __default: ['a']
+          __other: ['b']
+        app3:
+          __default: []
+          __other: []
+
+      @scheduler._prepareApps()
+      # 2x app3, 3x app1
+      expect(prepare).to.have.callCount 5
+      expect(prepare.args[0][0]).to.equal 'app1'
+      expect(prepare.args[1][0]).to.equal 'app1'
+      expect(prepare.args[2][0]).to.equal 'app1'
+      expect(prepare.args[3][0]).to.equal 'app3'
+      expect(prepare.args[4][0]).to.equal 'app3'
+
   describe '#_prepare', ->
     it 'should make a prepare() call', (done) ->
       @prepare.returns new promise (resolve, reject) -> reject()
+      @scheduler._activePrepareCalls =
+        app: 1
       @scheduler._prepare 'app'
         .catch =>
+          expect(@scheduler._activePrepareCalls['app']).to.equal 1
           expect(@prepare).to.have.been.calledOnce
           expect(@prepare).to.have.been.calledWith 'app'
           done()
 
+      expect(@scheduler._activePrepareCalls['app']).to.equal 2
+
     it 'should add view to the default queue when contentId is \
         empty', (done) ->
       @scheduler._queues =
-        'app':
+        app:
           __default: []
+      @scheduler._activePrepareCalls =
+        app: 1
       @prepare.returns new promise (resolve, reject) ->
         resolve
           viewId: 'view-id'
@@ -534,8 +665,10 @@ describe 'Scheduler', ->
 
     it 'should create a new queue when contentId is not empty', (done) ->
       @scheduler._queues =
-        'app':
+        app:
           __default: []
+      @scheduler._activePrepareCalls =
+        app: 1
       @prepare.returns new promise (resolve, reject) ->
         resolve
           viewId:       'view-id'
@@ -568,6 +701,9 @@ describe 'Scheduler', ->
           __default: []
         app2:
           __default: []
+      expect(@scheduler._activePrepareCalls).to.deep.equal
+        app1: 0
+        app2: 0
 
   describe '#_extractAppList', ->
     it 'should extract the unique list of apps from a strategy', ->

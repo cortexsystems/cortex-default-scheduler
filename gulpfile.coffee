@@ -8,15 +8,17 @@ mocha       = require 'gulp-mocha'
 Package     = require './package.json'
 
 project =
-  dist:     './dist'
-  build:    './build'
-  src:      './src/**/*.coffee'
-  tests:    './test/**/*-test.coffee'
-  static:   './static/**'
-  manifest: './manifest.json'
+  dist:         './dist'
+  build:        './build'
+  src:          './src/**/*.coffee'
+  tests:        './test/**/*-test.coffee'
+  static:       './static/**'
+  assets_src:   './app_assets/**'
+  assets_dest:  './build/app_assets'
+  manifest:     './manifest.json'
 
 gulp.task 'default', ['pack']
-gulp.task 'build', ['src', 'static', 'manifest']
+gulp.task 'build', ['src', 'app_assets', 'static', 'manifest']
 
 gulp.task 'src', ->
   gulp.src('./src/index.coffee',  read: false)
@@ -30,6 +32,10 @@ gulp.task 'src', ->
 gulp.task 'static', ->
   gulp.src(project.static)
     .pipe(gulp.dest(project.build))
+
+gulp.task 'app_assets', ->
+  gulp.src(project.assets_src)
+    .pipe(gulp.dest(project.assets_dest))
 
 gulp.task 'manifest', ->
   gulp.src(project.manifest)

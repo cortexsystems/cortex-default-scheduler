@@ -1,37 +1,76 @@
 promise = require 'promise'
 
-DEFAULT_KEY             = '__default'
-BUFFERED_VIEWS_PER_APP  = 5
+DEFAULT_KEY                       = '__default'
+BLACK_SCREEN                      = '__bs'
+BUFFERED_VIEWS_PER_APP            = 5
+# Health checks are disabled right after the scheduler starts for
+# HC_WARMUP_DURATION msecs.
+HC_WARMUP_DURATION                = 60 * 1000
+# Time between two run() calls. Scheduler will fail the health checks
+# when this threshold is exceeded.
+HC_RUN_CALL_THRESHOLD             = 3 * 60 * 1000
+# Time between two successful renders. Scheduler will fail the health
+# checks when this threshold is exceeded.
+HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
 
 class DefaultScheduler
   start: (@_api, @_strategy) ->
-    @_currentApp    = undefined
-    @_priorityIndex = 0
-    @_appIndex      = 0
-    @_queues        = {}
-    @_beginTime     = 0
-    @_endTime       = 0
+    @_startTime             = new Date().getTime()
+    @_lastRunTime           = new Date().getTime()
+    @_lastSuccessfulRunTime = new Date().getTime()
+    @_currentApp            = undefined
+    @_priorityIndex         = 0
+    @_appIndex              = 0
+    @_queues                = {}
+    @_beginTime             = 0
+    @_endTime               = 0
+    @_activePrepareCalls    = {}
 
     @_apps = @_extractAppList @_strategy
     @_initPriorityQueues()
 
-    @_prepareApps()
     @_run()
 
-  _run: ->
-    @_runStep()
+    @_api.app.registerHealthCheck @_onHealthCheck
 
-  _runStep: ->
+  _onHealthCheck: (report) =>
+    now = new Date().getTime()
+    if now < @_startTime + HC_WARMUP_DURATION
+      # Ignore health checks during the warm up period.
+      report status: true
+      return
+
+    if now > @_lastRunTime + HC_RUN_CALL_THRESHOLD
+      # No run() calls.
+      report status: false, reason: 'Scheduler has stopped working.'
+      return
+
+    if now > @_lastSuccessfulRunTime + HC_SUCCESSFUL_RUN_CALL_THRESHOLD
+      # No successfull render() calls.
+      report
+        status: false
+        reason: "Scheduler hasn't rendered any content for too long."
+      return
+
+    report status: true
+
+  _run: =>
     if not @_strategy? or @_strategy.length == 0
       throw new Error 'Scheduler cannot run without a strategy'
 
-    if @_priorityIndex >= @_strategy.length
-      @_priorityIndex = 0
-      @_appIndex = 0
+    @_lastRunTime = new Date().getTime()
+    @_prepareApps()
+    @_runStep()
 
+  _runStep: ->
     new promise (resolve, reject) =>
+      if @_priorityIndex >= @_strategy.length
+        @_priorityIndex = 0
+        @_appIndex = 0
+
       @_tryPriority @_priorityIndex, @_appIndex
         .then =>
+          @_lastSuccessfulRunTime = new Date().getTime()
           if @_priorityIndex == 0
             # We are at the top level. Try the next app in this priority level.
             @_appIndex = @_appIndex + 1
@@ -42,14 +81,19 @@ class DefaultScheduler
             # level in the next cycle.
             @_priorityIndex = 0
             @_appIndex = 0
-          process.nextTick => @_run()
+          process.nextTick @_run
           resolve()
         .catch (e) =>
           # All apps in this priority level has failed. Move to the next level.
           @_priorityIndex += 1
           @_appIndex = 0
-          process.nextTick => @_run()
-          reject()
+          if @_priorityIndex >= @_strategy.length
+            # All priority levels tested. Slow down and notify user.
+            @_api.scheduler.trackView BLACK_SCREEN
+            global.setTimeout @_run, 1000
+          else
+            process.nextTick @_run
+          reject e
 
   _tryPriority: (priorityIndex, appIndex) ->
     new promise (resolve, reject) =>
@@ -115,12 +159,13 @@ class DefaultScheduler
           reject e
 
       # Resolve only when both promises resolve.
-      onSuccess = ->
+      onSuccess = =>
         resolveCnt = resolveCnt + 1
         if resolveCnt == 2
           et = new Date().getTime()
           console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
             in #{et - st} msecs."""
+          @_api.scheduler.trackView app, view.contentLabel
           resolve()
 
       @_api.scheduler.showHide app, @_currentApp
@@ -131,19 +176,33 @@ class DefaultScheduler
 
       @_api.scheduler.render app, view.viewId
         .then onSuccess
-        .catch =>
+        .catch (e) =>
           @_discardView app, view
-          onError()
+          onError e
 
   _prepareApps: ->
     for app, s of @_apps
-      for i in [1..BUFFERED_VIEWS_PER_APP]
-        @_prepare app
+      appQ = @_queues?[app]
+      reqCnt = 0
+      if appQ?
+        viewCnt = 0
+        for v, q of appQ
+          viewCnt += q?.length || 0
+        reqCnt = BUFFERED_VIEWS_PER_APP - viewCnt
+      else
+        reqCnt = BUFFERED_VIEWS_PER_APP
+
+      reqCnt = reqCnt - @_activePrepareCalls[app]
+      if reqCnt > 0
+        for i in [1..reqCnt]
+          @_prepare app
 
   _prepare: (app) ->
     new promise (resolve, reject) =>
+      @_activePrepareCalls[app] = @_activePrepareCalls[app] + 1
       @_api.scheduler.prepare app
         .then (resp) =>
+          @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           if not not resp?.viewId
             viewId = resp.viewId
             contentId = resp?.contentId || DEFAULT_KEY
@@ -155,21 +214,23 @@ class DefaultScheduler
               contentId:    contentId
               contentLabel: contentLabel
           resolve()
-        .catch (e) ->
-          console.log "prepare() call failed for app #{app}. e=#{e?.message}"
-          reject()
+        .catch (e) =>
+          @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
+          console.error "prepare() call failed for app #{app}.", e
+          reject e
 
   _discardView: (app, view) ->
     appQ = @_queues?[app]
     viewQ = appQ?[view?.contentId]
     if viewQ?.length > 0
       viewQ.shift()
-      @_prepare app
 
   _initPriorityQueues: ->
     @_queues = {}
+    @_activePrepareCalls = {}
     for app, s of @_apps
       @_queues[app] = "#{DEFAULT_KEY}": []
+      @_activePrepareCalls[app] = 0
 
   _extractAppList: (strategy) ->
     apps = {}

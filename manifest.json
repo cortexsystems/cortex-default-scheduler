@@ -2,8 +2,20 @@
     "name": "com.cortexpowered.scheduler.default",
     "version": "1.0.0",
     "displayName": "Cortex Default Scheduler",
-    "author": "Cortex Systems, LLC",
+    "description": "The default Cortex scheduler displays a set of apps based on a strategy. Only one app can be active at a time and apps will get displayed in fullscreen.",
+    "author": "Cortex",
     "email": "support@cortexpowered.com",
     "homepage": "http://www.cortexpowered.com",
-    "type": "scheduler"
+    "type": "scheduler",
+    "assets": {
+        "icon128": "",
+        "icon256": "./app_assets/icon256.png",
+        "icon512": "",
+        "screenshot1": "",
+        "screenshot2": "",
+        "screenshot3": "",
+        "screenshot4": "",
+        "screenshot5": ""
+    },
+    "parameters": []
 }
