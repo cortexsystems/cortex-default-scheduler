@@ -132,11 +132,9 @@ class DefaultScheduler
         if views.length == 0
           continue
 
-        view = views[0]
+        view = views.shift()
         @_render app, view
-          .then =>
-            @_discardView app, view
-            resolve()
+          .then resolve
           .catch reject
         return
 
@@ -146,39 +144,15 @@ class DefaultScheduler
     console.log "Rendering #{app}/#{view.contentId}/#{view.viewId}."
     st = new Date().getTime()
     new promise (resolve, reject) =>
-      # We can't use promise.all() to combine the showHide() and render()
-      # promises since we need to set _currentApp when showHide() succeeds
-      # regardless of the overall success of the _render.
-      rejected = false
-      resolveCnt = 0
-
-      # Reject only once.
-      onError = (e) ->
-        if not rejected
-          rejected = true
-          reject e
-
-      # Resolve only when both promises resolve.
-      onSuccess = =>
-        resolveCnt = resolveCnt + 1
-        if resolveCnt == 2
+      @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app
+        .then =>
           et = new Date().getTime()
           console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
             in #{et - st} msecs."""
+          @_currentApp = app
           @_api.scheduler.trackView app, view.contentLabel
           resolve()
-
-      @_api.scheduler.showHide app, @_currentApp
-        .then =>
-          @_currentApp = app
-          onSuccess()
-        .catch onError
-
-      @_api.scheduler.render app, view.viewId
-        .then onSuccess
-        .catch (e) =>
-          @_discardView app, view
-          onError e
+        .catch reject
 
   _prepareApps: ->
     for app, s of @_apps
@@ -218,12 +192,6 @@ class DefaultScheduler
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           console.error "prepare() call failed for app #{app}.", e
           reject e
-
-  _discardView: (app, view) ->
-    appQ = @_queues?[app]
-    viewQ = appQ?[view?.contentId]
-    if viewQ?.length > 0
-      viewQ.shift()
 
   _initPriorityQueues: ->
     @_queues = {}

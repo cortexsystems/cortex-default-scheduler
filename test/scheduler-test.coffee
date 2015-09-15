@@ -7,15 +7,13 @@ DefaultScheduler = require '../src/scheduler'
 
 describe 'Scheduler', ->
   beforeEach ->
-    @render = sinon.stub()
-    @showHide = sinon.stub()
+    @hideRenderShow = sinon.stub()
     @prepare = sinon.stub()
     @trackView = sinon.stub()
     @api =
       scheduler:
-        render:   @render
-        prepare:  @prepare
-        showHide: @showHide
+        prepare: @prepare
+        hideRenderShow: @hideRenderShow
         trackView: @trackView
     @clock = sinon.useFakeTimers()
     @scheduler = new DefaultScheduler()
@@ -400,7 +398,6 @@ describe 'Scheduler', ->
         .catch done
 
     it 'should render a view', (done) ->
-      dv = sinon.stub @scheduler, '_discardView'
       render = sinon.stub @scheduler, '_render', ->
         new promise (resolve, reject) -> resolve()
       view =
@@ -411,15 +408,13 @@ describe 'Scheduler', ->
           __default: []
           other: [view]
       @scheduler._tryApp 'app'
-        .then ->
-          expect(dv).to.have.been.calledOnce
-          expect(dv).to.have.been.calledWith 'app', view
+        .then =>
+          expect(@scheduler._queues.app.other).to.deep.equal []
           expect(render).to.have.been.calledOnce
           expect(render).to.have.been.calledWith 'app', view
           done()
 
     it 'should fail when render fails', (done) ->
-      dv = sinon.stub @scheduler, '_discardView'
       render = sinon.stub @scheduler, '_render', ->
         new promise (resolve, reject) -> reject()
       view =
@@ -430,141 +425,54 @@ describe 'Scheduler', ->
           __default: []
           other: [view]
       @scheduler._tryApp 'app'
-        .catch ->
-          expect(dv).to.not.have.been.called
+        .catch =>
+          expect(@scheduler._queues.app.other).to.deep.equal []
           expect(render).to.have.been.calledOnce
           expect(render).to.have.been.calledWith 'app', view
           done()
 
   describe '#_render', ->
-    it 'should make a showHide and render call', (done) ->
+    it 'should make a hideRenderShow and render call', (done) ->
       @scheduler._currentApp = 'app2'
-      @showHide.returns new promise (resolve, reject) -> resolve()
-      @render.returns new promise (resolve, reject) -> resolve()
+      @hideRenderShow.returns new promise (resolve, reject) -> resolve()
       view =
         viewId: 'view-id'
         contentLabel: 'label'
       @scheduler._render 'app1', view
         .then =>
-          expect(@showHide).to.have.been.calledOnce
-          expect(@showHide).to.have.been.calledWith 'app1', 'app2'
-          expect(@render).to.have.been.calledOnce
-          expect(@render).to.have.been.calledWith 'app1', 'view-id'
+          expect(@hideRenderShow).to.have.been.calledOnce
+          expect(@hideRenderShow).to.have.been.calledWith(
+            'app2', 'view-id', 'app1')
           expect(@trackView).to.have.been.calledOnce
           expect(@trackView).to.have.been.calledWith 'app1', 'label'
           expect(@scheduler._currentApp).to.equal 'app1'
           done()
 
-    it 'should discard the view when render fails', (done) ->
+    it 'should set the current app when hideRenderShow succeeds', (done) ->
       @scheduler._currentApp = 'app2'
-      dv = sinon.stub @scheduler, '_discardView'
-      @showHide.returns new promise (resolve, reject) -> resolve()
-      @render.returns new promise (resolve, reject) -> reject()
+      @hideRenderShow.returns new promise (resolve, reject) -> resolve()
       view =
         viewId: 'view-id'
       @scheduler._render 'app1', view
-        .catch =>
-          expect(@showHide).to.have.been.calledOnce
-          expect(@showHide).to.have.been.calledWith 'app1', 'app2'
-          expect(@render).to.have.been.calledOnce
-          expect(@render).to.have.been.calledWith 'app1', 'view-id'
-          expect(@scheduler._currentApp).to.equal 'app1'
-          expect(dv).to.have.been.calledOnce
-          expect(dv).to.have.been.calledWith 'app1', view
-          done()
-
-    it 'should set the current app when showHide succeeds', (done) ->
-      @scheduler._currentApp = 'app2'
-      @showHide.returns new promise (resolve, reject) -> resolve()
-      @render.returns new promise (resolve, reject) -> reject()
-      view =
-        viewId: 'view-id'
-      @scheduler._render 'app1', view
-        .catch =>
-          expect(@showHide).to.have.been.calledOnce
-          expect(@showHide).to.have.been.calledWith 'app1', 'app2'
-          expect(@render).to.have.been.calledOnce
-          expect(@render).to.have.been.calledWith 'app1', 'view-id'
+        .then =>
+          expect(@hideRenderShow).to.have.been.calledOnce
+          expect(@hideRenderShow).to.have.been.calledWith(
+            'app2', 'view-id', 'app1')
           expect(@scheduler._currentApp).to.equal 'app1'
           done()
 
-    it 'should fail when showHide fails', (done) ->
+    it 'should fail when hideRenderShow fails', (done) ->
       @scheduler._currentApp = 'app2'
-      dv = sinon.stub @scheduler, '_discardView'
-      @showHide.returns new promise (resolve, reject) -> reject()
-      @render.returns new promise (resolve, reject) -> resolve()
+      @hideRenderShow.returns new promise (resolve, reject) -> reject()
       view =
         viewId: 'view-id'
       @scheduler._render 'app1', view
         .catch =>
-          expect(dv).to.not.have.been.called
-          expect(@showHide).to.have.been.calledOnce
-          expect(@showHide).to.have.been.calledWith 'app1', 'app2'
-          expect(@render).to.have.been.calledOnce
-          expect(@render).to.have.been.calledWith 'app1', 'view-id'
+          expect(@hideRenderShow).to.have.been.calledOnce
+          expect(@hideRenderShow).to.have.been.calledWith(
+            'app2', 'view-id', 'app1')
           expect(@scheduler._currentApp).to.equal 'app2'
           done()
-
-    it 'should fail when both api calls fail', (done) ->
-      @scheduler._currentApp = 'app2'
-      @showHide.returns new promise (resolve, reject) -> reject()
-      @render.returns new promise (resolve, reject) -> reject()
-      view =
-        viewId: 'view-id'
-      @scheduler._render 'app1', view
-        .catch =>
-          expect(@showHide).to.have.been.calledOnce
-          expect(@showHide).to.have.been.calledWith 'app1', 'app2'
-          expect(@render).to.have.been.calledOnce
-          expect(@render).to.have.been.calledWith 'app1', 'view-id'
-          expect(@scheduler._currentApp).to.equal 'app2'
-          done()
-
-  describe '#_discardView', ->
-    it 'should discard the view', ->
-      view1 =
-        viewId: 'view1'
-        contentId: 'other'
-      view2 =
-        viewId: 'view2'
-        contentId: 'other'
-      view3 =
-        viewId: 'view3'
-        contentId: '__default'
-      @scheduler._queues =
-        app:
-          __default: [view3]
-          other: [view1, view2]
-
-      @scheduler._discardView 'app', undefined
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: [view3]
-          other: [view1, view2]
-
-      @scheduler._discardView 'app', view1
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: [view3]
-          other: [view2]
-
-      @scheduler._discardView 'app', view2
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: [view3]
-          other: []
-
-      @scheduler._discardView 'app', view3
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: []
-          other: []
-
-      @scheduler._discardView 'app', view3
-      expect(@scheduler._queues).to.deep.equal
-        app:
-          __default: []
-          other: []
 
   describe '#_prepareApps', ->
     it 'should call prepare() BUFFERED_VIEWS_PER_APP times for each app', ->
