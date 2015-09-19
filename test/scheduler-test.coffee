@@ -22,6 +22,19 @@ describe 'Scheduler', ->
   afterEach ->
     @clock.restore()
 
+  describe '#_onAppCrash', ->
+    it 'should discard views of the crashed apps', ->
+      @scheduler._queues =
+        'app-id':
+          '__default': ['a', 'b']
+          'other': ['c']
+      @scheduler._activePrepareCalls = 'app-id': 10
+      @scheduler._onAppCrash 'app-id'
+      expect(@scheduler._queues).to.deep.equal
+        'app-id':
+          '__default': []
+      expect(@scheduler._activePrepareCalls['app-id']).to.equal 0
+
   describe '#_onHealthCheck', ->
     it 'should succeed during the warmup period', ->
       report = sinon.stub()

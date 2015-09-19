@@ -5,7 +5,7 @@ init = ->
   window.CortexScheduler = scheduler
 
   onStart = ->
-    window.Cortex.scheduler.start (strategy) ->
+    window.Cortex.scheduler.onStart (strategy) ->
       scheduler.start window.Cortex, strategy
 
   window.addEventListener 'cortex-ready', onStart

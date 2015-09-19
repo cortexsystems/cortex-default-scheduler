@@ -29,9 +29,16 @@ class DefaultScheduler
     @_apps = @_extractAppList @_strategy
     @_initPriorityQueues()
 
+    @_api.scheduler.onAppCrash @_onAppCrash
+
     @_run()
 
     @_api.app.registerHealthCheck @_onHealthCheck
+
+  _onAppCrash: (appId) =>
+    console.log "Received an app crash: #{appId}"
+    @_queues[appId] = "#{DEFAULT_KEY}": []
+    @_activePrepareCalls[appId] = 0
 
   _onHealthCheck: (report) =>
     now = new Date().getTime()
