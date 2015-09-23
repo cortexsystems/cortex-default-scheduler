@@ -391,7 +391,7 @@ describe 'Scheduler', ->
 
   describe '#_tryApp', ->
     it 'should fail when queue is not okay', (done) ->
-      expect(@scheduler._queues).to.not.be.ok
+      expect(@scheduler._queues).to.deep.equal {}
       @scheduler._tryApp 'app'
         .catch done
 
@@ -409,6 +409,27 @@ describe 'Scheduler', ->
           other: []
       @scheduler._tryApp 'app'
         .catch done
+
+    it 'should try to find a view', (done) ->
+      fv = sinon.stub @scheduler, '_findView', -> undefined
+      render = sinon.stub @scheduler, '_render', ->
+        new promise (resolve, reject) -> resolve()
+      view =
+        viewId: 'viewId'
+        contentId: 'other'
+      @scheduler._queues =
+        'app':
+          __default: []
+          other: [view]
+      expect(@scheduler._appViewIndex).to.deep.equal {}
+      @scheduler._tryApp 'app'
+        .catch =>
+          expect(@scheduler._appViewIndex.app).to.equal 0
+          expect(fv).to.have.been.calledOnce
+          expect(fv).to.have.been.calledWith(
+            'app', @scheduler._queues.app, ['__default', 'other'], 1)
+          expect(render).to.not.have.been.called
+          done()
 
     it 'should render a view', (done) ->
       render = sinon.stub @scheduler, '_render', ->
@@ -443,6 +464,42 @@ describe 'Scheduler', ->
           expect(render).to.have.been.calledOnce
           expect(render).to.have.been.calledWith 'app', view
           done()
+
+  describe '#_findView', ->
+    it 'should return when asked index is the last rendered one', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 1
+      queue =
+        __default: []
+        first: []
+        second: []
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.be.undefined
+      expect(@scheduler._appViewIndex.app).to.equal 1
+      expect(fv).to.have.been.calledOnce
+
+    it 'should advance to the next view queue until it finds one', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      queue =
+        __default:  []
+        first:      []
+        second:     []
+        third:      ['v1', 'v2']
+        fourth:     ['v3']
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.equal 'v1'
+      expect(@scheduler._appViewIndex.app).to.equal 3
+      expect(fv).to.have.been.calledThrice
+      expect(queue).to.deep.equal
+        __default:  []
+        first:      []
+        second:     []
+        third:      ['v2']
+        fourth:     ['v3']
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+      expect(fv.args[1]).to.deep.equal ['app', queue, Object.keys(queue), 2]
+      expect(fv.args[2]).to.deep.equal ['app', queue, Object.keys(queue), 3]
 
   describe '#_render', ->
     it 'should make a hideRenderShow and render call', (done) ->
@@ -612,7 +669,7 @@ describe 'Scheduler', ->
 
   describe '#_initPriorityQueues', ->
     it 'should initialize app queues', ->
-      expect(@scheduler._queues).to.not.be.ok
+      expect(@scheduler._queues).to.deep.equal {}
       @scheduler._apps =
         app1: true
         app2: true

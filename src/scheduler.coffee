@@ -14,17 +14,20 @@ HC_RUN_CALL_THRESHOLD             = 3 * 60 * 1000
 HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
 
 class DefaultScheduler
+  constructor: ->
+    @_currentApp          = undefined
+    @_priorityIndex       = 0
+    @_appIndex            = 0
+    @_queues              = {}
+    @_beginTime           = 0
+    @_endTime             = 0
+    @_activePrepareCalls  = {}
+    @_appViewIndex        = {}
+
   start: (@_api, @_strategy) ->
     @_startTime             = new Date().getTime()
     @_lastRunTime           = new Date().getTime()
     @_lastSuccessfulRunTime = new Date().getTime()
-    @_currentApp            = undefined
-    @_priorityIndex         = 0
-    @_appIndex              = 0
-    @_queues                = {}
-    @_beginTime             = 0
-    @_endTime               = 0
-    @_activePrepareCalls    = {}
 
     @_apps = @_extractAppList @_strategy
     @_initPriorityQueues()
@@ -135,17 +138,36 @@ class DefaultScheduler
         return reject()
 
       queue = @_queues[app]
-      for contentId, views of queue
-        if views.length == 0
-          continue
 
-        view = views.shift()
-        @_render app, view
+      contentIds = Object.keys(queue)
+      if contentIds.length == 0
+        return reject()
+
+      if app not in @_appViewIndex
+        @_appViewIndex[app] = 0
+
+      view = @_findView(app, queue, contentIds, @_appViewIndex[app] + 1)
+      if view?
+        return @_render app, view
           .then resolve
           .catch reject
-        return
 
       reject()
+
+  _findView: (app, queue, contentIds, index) ->
+    if index >= contentIds.length
+      index = 0
+
+    contentId = contentIds[index]
+    views = queue[contentId]
+    if views.length > 0
+      @_appViewIndex[app] = index
+      return views.shift()
+
+    if @_appViewIndex[app] == index
+      return
+
+    return @_findView(app, queue, contentIds, index + 1)
 
   _render: (app, view) ->
     console.log "Rendering #{app}/#{view.contentId}/#{view.viewId}."
@@ -206,6 +228,7 @@ class DefaultScheduler
     for app, s of @_apps
       @_queues[app] = "#{DEFAULT_KEY}": []
       @_activePrepareCalls[app] = 0
+      @_appViewIndex[app] = 0
 
   _extractAppList: (strategy) ->
     apps = {}
