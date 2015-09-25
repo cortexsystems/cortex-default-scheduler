@@ -138,8 +138,11 @@ describe 'Scheduler', ->
         ['c', 'd'],
         ['e']
       ]
+      @scheduler._totalAppSlots = 5
+      @scheduler._failedAppSlots = 4
       @scheduler._runStep()
         .then =>
+          expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 0, 0
           expect(@scheduler._priorityIndex).to.equal 0
@@ -160,8 +163,11 @@ describe 'Scheduler', ->
         ['d', 'e'],
         ['e']
       ]
+      @scheduler._totalAppSlots = 6
+      @scheduler._failedAppSlots = 4
       @scheduler._runStep()
         .then =>
+          expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 0, 2
           expect(@scheduler._priorityIndex).to.equal 0
@@ -182,8 +188,11 @@ describe 'Scheduler', ->
         ['d', 'e', 'f'],
         ['e']
       ]
+      @scheduler._totalAppSlots = 7
+      @scheduler._failedAppSlots = 5
       @scheduler._runStep()
         .then =>
+          expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 1, 1
           expect(@scheduler._priorityIndex).to.equal 0
@@ -204,8 +213,11 @@ describe 'Scheduler', ->
         ['d', 'e', 'f'],
         ['e']
       ]
+      @scheduler._totalAppSlots = 7
+      expect(@scheduler._failedAppSlots).to.equal 0
       @scheduler._runStep()
         .catch (e) =>
+          expect(@scheduler._failedAppSlots).to.equal 1
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 1, 1
           expect(@scheduler._priorityIndex).to.equal 2
@@ -227,8 +239,11 @@ describe 'Scheduler', ->
         ['d', 'e', 'f'],
         ['e']
       ]
+      @scheduler._totalAppSlots = 7
+      @scheduler._failedAppSlots = 6
       @scheduler._runStep()
         .catch (e) =>
+          expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 2, 1
           expect(@scheduler._priorityIndex).to.equal 3
@@ -239,6 +254,32 @@ describe 'Scheduler', ->
           @clock.tick 1000
           expect(run).to.have.been.calledOnce
           done()
+
+    it 'should not notify a black screen when there are still apps that are \
+        not failed', (done) ->
+      @scheduler._priorityIndex = 2
+      @scheduler._appIndex = 1
+      run = sinon.stub @scheduler, '_run', ->
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        new promise (resolve, reject) -> reject()
+      @scheduler._strategy = [
+        ['a', 'b', 'c'],
+        ['d', 'e', 'f'],
+        ['e']
+      ]
+      @scheduler._totalAppSlots = 7
+      @scheduler._failedAppSlots = 3
+      @scheduler._runStep()
+        .catch (e) =>
+          expect(@scheduler._failedAppSlots).to.equal 4
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 2, 1
+          expect(@scheduler._priorityIndex).to.equal 3
+          expect(@scheduler._appIndex).to.equal 0
+          process.nextTick =>
+            expect(@trackView).to.not.have.been.called
+            expect(run).to.have.been.calledOnce
+            done()
 
   describe '#_run', ->
     it 'should try all apps in priority order when everything fails', (done) ->
@@ -690,8 +731,11 @@ describe 'Scheduler', ->
         ['app1', 'app3'],
         ['app4']
       ]
-      expect(@scheduler._extractAppList(strategy)).to.deep.equal
+      expect(@scheduler._totalAppSlots).to.equal 0
+      ret = @scheduler._extractAppList(strategy)
+      expect(ret).to.deep.equal
         app1: true
         app2: true
         app3: true
         app4: true
+      expect(@scheduler._totalAppSlots).to.equal 5

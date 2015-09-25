@@ -24,6 +24,9 @@ class DefaultScheduler
     @_activePrepareCalls  = {}
     @_appViewIndex        = {}
 
+    @_totalAppSlots       = 0
+    @_failedAppSlots      = 0
+
   start: (@_api, @_strategy) ->
     @_startTime             = new Date().getTime()
     @_lastRunTime           = new Date().getTime()
@@ -80,6 +83,7 @@ class DefaultScheduler
 
       @_tryPriority @_priorityIndex, @_appIndex
         .then =>
+          @_failedAppSlots = 0
           @_lastSuccessfulRunTime = new Date().getTime()
           if @_priorityIndex == 0
             # We are at the top level. Try the next app in this priority level.
@@ -96,8 +100,10 @@ class DefaultScheduler
         .catch (e) =>
           # All apps in this priority level has failed. Move to the next level.
           @_priorityIndex += 1
+          @_failedAppSlots += 1
           @_appIndex = 0
-          if @_priorityIndex >= @_strategy.length
+          if @_failedAppSlots >= @_totalAppSlots
+            @_failedAppSlots = 0
             # All priority levels tested. Slow down and notify user.
             @_api.scheduler.trackView BLACK_SCREEN
             global.setTimeout @_run, 1000
@@ -234,6 +240,7 @@ class DefaultScheduler
     apps = {}
     for priority in strategy
       for app in priority
+        @_totalAppSlots += 1
         apps[app] = true
 
     apps
