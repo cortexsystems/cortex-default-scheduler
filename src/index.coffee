@@ -1,4 +1,4 @@
-DefaultScheduler = require './scheduler'
+{DefaultScheduler} = require './scheduler'
 
 init = ->
   scheduler = new DefaultScheduler()

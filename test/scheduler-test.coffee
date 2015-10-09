@@ -3,7 +3,15 @@ expect    = require('chai').expect
 sinon     = require 'sinon'
 promise   = require 'promise'
 
-DefaultScheduler = require '../src/scheduler'
+{
+  DefaultScheduler,
+  DEFAULT_KEY,
+  BLACK_SCREEN,
+  BUFFERED_VIEWS_PER_APP,
+  HC_WARMUP_DURATION,
+  HC_RUN_CALL_THRESHOLD,
+  HC_SUCCESSFUL_RUN_CALL_THRESHOLD
+} = require '../src/scheduler'
 
 describe 'Scheduler', ->
   beforeEach ->
@@ -51,7 +59,7 @@ describe 'Scheduler', ->
     it 'should fail when there have been no run calls', ->
       rs = sinon.stub @scheduler, '_runStep', ->
       # warm up
-      @clock.tick 60000
+      @clock.tick HC_WARMUP_DURATION
       @scheduler._strategy = [['a']]
       @scheduler._run()
       @clock.tick 200000
@@ -65,7 +73,7 @@ describe 'Scheduler', ->
 
     it 'should fail when there have been no successful renders', ->
       # warm up
-      @clock.tick 500000
+      @clock.tick HC_WARMUP_DURATION * 10
       now = new Date().getTime()
       @scheduler._lastRunTime = now
       @scheduler._lastSuccessfulRunTime = now - 300000
@@ -78,7 +86,7 @@ describe 'Scheduler', ->
         reason: "Scheduler hasn't rendered any content for too long."
 
     it 'should succeed when everything is alright', ->
-      @clock.tick = 500000
+      @clock.tick HC_WARMUP_DURATION * 10
       now = new Date().getTime()
       @scheduler._lastRunTime = now
       @scheduler._lastSuccessfulRunTime = now
@@ -598,7 +606,7 @@ describe 'Scheduler', ->
         app3: 0
 
       @scheduler._prepareApps()
-      expect(prepare).to.have.callCount 3 * 5
+      expect(prepare).to.have.callCount 3 * BUFFERED_VIEWS_PER_APP
 
     it 'should make less prepare() calls when there are active calls', ->
       prepare = sinon.stub @scheduler, '_prepare'
@@ -608,12 +616,12 @@ describe 'Scheduler', ->
         app3: true
       @scheduler._activePrepareCalls =
         app1: 0
-        app2: 3
+        app2: 1
         app3: 5
 
       @scheduler._prepareApps()
-      # 5x app1, 2x app2
-      expect(prepare).to.have.callCount 7
+      # BUFFERED_VIEWS_PER_APPx app1, 1x app2
+      expect(prepare).to.have.callCount BUFFERED_VIEWS_PER_APP + 1
 
     it 'should make less prepare() calls when queues are not empty', ->
       prepare = sinon.stub @scheduler, '_prepare'
@@ -624,7 +632,7 @@ describe 'Scheduler', ->
       @scheduler._activePrepareCalls =
         app1: 0
         app2: 3
-        app3: 3
+        app3: 1
       @scheduler._queues =
         app1:
           __default: ['a', 'b']
@@ -636,13 +644,9 @@ describe 'Scheduler', ->
           __other: []
 
       @scheduler._prepareApps()
-      # 2x app3, 3x app1
-      expect(prepare).to.have.callCount 5
-      expect(prepare.args[0][0]).to.equal 'app1'
-      expect(prepare.args[1][0]).to.equal 'app1'
-      expect(prepare.args[2][0]).to.equal 'app1'
-      expect(prepare.args[3][0]).to.equal 'app3'
-      expect(prepare.args[4][0]).to.equal 'app3'
+      # 1x app3
+      expect(prepare).to.have.been.calledOnce
+      expect(prepare.args[0][0]).to.equal 'app3'
 
   describe '#_prepare', ->
     it 'should make a prepare() call', (done) ->

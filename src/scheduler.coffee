@@ -2,7 +2,7 @@ promise = require 'promise'
 
 DEFAULT_KEY                       = '__default'
 BLACK_SCREEN                      = '__bs'
-BUFFERED_VIEWS_PER_APP            = 5
+BUFFERED_VIEWS_PER_APP            = 2
 # Health checks are disabled right after the scheduler starts for
 # HC_WARMUP_DURATION msecs.
 HC_WARMUP_DURATION                = 60 * 1000
@@ -245,4 +245,12 @@ class DefaultScheduler
 
     apps
 
-module.exports = DefaultScheduler
+module.exports = {
+  DefaultScheduler,
+  DEFAULT_KEY,
+  BLACK_SCREEN,
+  BUFFERED_VIEWS_PER_APP,
+  HC_WARMUP_DURATION,
+  HC_RUN_CALL_THRESHOLD,
+  HC_SUCCESSFUL_RUN_CALL_THRESHOLD
+}
