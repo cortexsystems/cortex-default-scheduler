@@ -13,18 +13,105 @@ HC_RUN_CALL_THRESHOLD             = 3 * 60 * 1000
 # checks when this threshold is exceeded.
 HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
 
+# A basic Cortex scheduler.
+#
+# This scheduler accepts a strategy and runs one app at a time fullscreen.
+# A strategy is a list of priority levels. Lower indexes have higher
+# importance. Each priority level consists of a list of applications.
+# Priority levels can have multiple instances of the same app. Here is a sample
+# strategy:
+#
+# [
+#   ['ads', 'ads', 'editorial']
+#   ['editorial', 'static-images']
+#   ['static-images']
+# ]
+#
+# The scheduler creates a view queue for each application (@_queues). For the
+# above strategy, the scheduler would create 3 view queues. Applications may
+# pass a content id with each prepare() call. In this case, the scheduler will
+# create additional queues per unique content id.
+#
+# Priority Behavior:
+#
+#  - The very first step starts at P0-A0.
+#  - During a step, we try a single priority level.
+#  - During a step, we try the remaining apps of a priority level.
+#  - When a step succeeds, we advance the app index, so next time we try the
+#    same priority level, we'll try the next app in that level.
+#  - When a step succeeds, if we are not at the top priority level, we reset
+#    app indexes of all top level priority levels and start at P0-A0.
+#  - When a step fails (no render), we move to the next priority level.
+#  - When a step fails and we tried all apps, the scheduler will sleep for
+#    some time and report a black screen.
+#
+# Sample run:
+#   P0: ['a', 'b', 'c']
+#   P1: ['d', 'e', 'f']
+#   P2: ['g', 'h', 'i']
+#
+# Step 1: Try 'a'. (Assume rendering status to be: Success)
+# Step 2: Try 'b'. (Success)
+# Step 3: Try 'c'. (Success)
+# Step 4: Try 'a'. (Success)
+# Step 5: Try 'b'. (Fail)
+# Step 6: Try 'c'. (Fail)
+# Step 7: Try 'a'. (Fail)
+# Step 8: Try 'd'. (Fail)
+# Step 9: Try 'e'. (Success)
+# Step 10: Try 'a'. (Fail)
+# Step 11: Try 'b'. (Fail)
+# Step 12: Try 'c'. (Fail)
+# Step 13: Try 'f'. (Fail)
+# Step 14: Try 'a'. (Fail)
+# Step 15: Try 'b'. (Fail)
+# Step 16: Try 'c'. (Fail)
+# Step 17: Try 'd'. (Fail)
+# Step 18: Try 'e'. (Fail)
+# Step 19: Try 'f'. (Fail)
+# Step 20: Try 'g'. (Success)
+# Step 21: Try 'a'...
+#
+# Unique Content:
+# The scheduler guarantees it will show unique content if an app provides
+# content ids. The scheduler will skip (not discard) a view, if the currently
+# tested app is the same as the currently rendered one and the tested view has
+# the same id as the currently rendered view.
+#
 class DefaultScheduler
   constructor: ->
+    # The last successfully rendered app.
     @_currentApp          = undefined
+    # The last successfully rendered view.
+    @_currentView         = undefined
+    # Keeps track of the priority index to be tried during the next step.
     @_priorityIndex       = 0
-    @_appIndex            = 0
+    # View queues for each app. Each app will start with a default queue, but
+    # they can create additional queues by passing a content id with prepare()
+    # calls. e.g.
+    # @_queues = {
+    #   'app1': {
+    #     '__default': ['v1', 'v2'],
+    #     'content-id-1': ['v3', 'v4']}
+    #   'app2': {
+    #     '__default': ['v1', 'v2']}
     @_queues              = {}
-    @_beginTime           = 0
-    @_endTime             = 0
+    # Keeps track of prepare() calls made to the apps in order not to flood
+    # apps.
     @_activePrepareCalls  = {}
+    # Keeps track of last tried view queue index for each app. For instance,
+    # if @_appViewIndex['app1'] is 2, this means we tried the third queue of
+    # app1. During the next run, we should try the fourth queue (or first, if
+    # it doesn't have four queues) of app1.
     @_appViewIndex        = {}
+    # Similar to appViewIndex, this keeps track of tried apps within a priority
+    # level.
+    @_priorityAppIndex    = []
 
+    # Number of unique apps in a strategy.
     @_totalAppSlots       = 0
+    # Failed unique app count so far. When an app renders, this counter will
+    # get reset.
     @_failedAppSlots      = 0
 
   start: (@_api, @_strategy) ->
@@ -78,30 +165,39 @@ class DefaultScheduler
   _runStep: ->
     new promise (resolve, reject) =>
       if @_priorityIndex >= @_strategy.length
-        @_priorityIndex = 0
-        @_appIndex = 0
+        # During the previous step we tried all available priority levels and
+        # still failed. We need to reset all levels and start from the top.
+        for pi in [0..@_strategy.length - 1]
+          @_priorityAppIndex[pi] = 0
 
-      @_tryPriority @_priorityIndex, @_appIndex
+        @_priorityIndex = 0
+
+      if @_priorityAppIndex[@_priorityIndex] >= \
+          @_strategy[@_priorityIndex].length
+        @_priorityAppIndex[@_priorityIndex] = 0
+
+      @_tryPriority @_priorityIndex, @_priorityAppIndex[@_priorityIndex]
         .then =>
           @_failedAppSlots = 0
           @_lastSuccessfulRunTime = new Date().getTime()
-          if @_priorityIndex == 0
-            # We are at the top level. Try the next app in this priority level.
-            @_appIndex = @_appIndex + 1
-            if @_appIndex >= @_strategy[@_priorityIndex].length
-              @_appIndex = 0
-          else
-            # An app in a lower level priority got rendered. Start from the top
-            # level in the next cycle.
-            @_priorityIndex = 0
-            @_appIndex = 0
+
+          # Move to the next app in the same priority level.
+          @_priorityAppIndex[@_priorityIndex] += 1
+
+          # Next step will start from the top. We need to reset app indexes in
+          # all higher priority levels.
+          if @_priorityIndex != 0
+            for pi in [0..@_priorityIndex - 1]
+              @_priorityAppIndex[pi] = 0
+          @_priorityIndex = 0
+
           process.nextTick @_run
           resolve()
         .catch (e) =>
           # All apps in this priority level has failed. Move to the next level.
           @_priorityIndex += 1
           @_failedAppSlots += 1
-          @_appIndex = 0
+
           if @_failedAppSlots >= @_totalAppSlots
             @_failedAppSlots = 0
             # All priority levels tested. Slow down and notify user.
@@ -167,8 +263,18 @@ class DefaultScheduler
     contentId = contentIds[index]
     views = queue[contentId]
     if views.length > 0
-      @_appViewIndex[app] = index
-      return views.shift()
+      if contentIds.length == 1 or @_currentApp != app
+        # Either the candidate app is different than the last rendered one or
+        # the candidate app doesn't provide content ids. In either case we
+        # shouldn't check for uniqueness.
+        @_appViewIndex[app] = index
+        return views.shift()
+      else
+        for view, idx in views
+          if view?.contentId != @_currentView?.contentId
+            @_appViewIndex[app] = index
+            deleted = views.splice(idx, 1)
+            return deleted[0]
 
     if @_appViewIndex[app] == index
       return
@@ -185,6 +291,7 @@ class DefaultScheduler
           console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
             in #{et - st} msecs."""
           @_currentApp = app
+          @_currentView = view
           @_api.scheduler.trackView app, view.contentLabel
           resolve()
         .catch reject
@@ -239,6 +346,7 @@ class DefaultScheduler
   _extractAppList: (strategy) ->
     apps = {}
     for priority in strategy
+      @_priorityAppIndex.push 0
       for app in priority
         @_totalAppSlots += 1
         apps[app] = true

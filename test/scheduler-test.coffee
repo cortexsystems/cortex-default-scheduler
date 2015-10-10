@@ -96,17 +96,9 @@ describe 'Scheduler', ->
       expect(report).to.have.been.calledOnce
       expect(report).to.have.been.calledWith status: true
 
-  describe '#_run', ->
-    it 'should throw when strategy is invalid', ->
-      expect(@scheduler._strategy).to.not.be.ok
-      expect(=> @scheduler._run()).to.throw
-      @scheduler._strategy = []
-      expect(=> @scheduler._run()).to.throw
-
   describe '#_runStep', ->
     it 'should try an app of a priority', ->
       @scheduler._priorityIndex = 1
-      @scheduler._appIndex = 0
       tp = sinon.stub @scheduler, '_tryPriority', ->
         then: ->
           catch: ->
@@ -115,13 +107,13 @@ describe 'Scheduler', ->
         ['c', 'd'],
         ['e']
       ]
+      @scheduler._priorityAppIndex = [0, 1, 0]
       @scheduler._runStep()
       expect(tp).to.have.been.calledOnce
-      expect(tp).to.have.been.calledWith 1, 0
+      expect(tp).to.have.been.calledWith 1, 1
 
     it 'should reset the indexes when priority index is out of bounds', ->
       @scheduler._priorityIndex = 6
-      @scheduler._appIndex = 1
       tp = sinon.stub @scheduler, '_tryPriority', ->
         then: ->
           catch: ->
@@ -130,81 +122,73 @@ describe 'Scheduler', ->
         ['c', 'd'],
         ['e']
       ]
+      @scheduler._priorityAppIndex = [8, 1, 3]
       @scheduler._runStep()
       expect(tp).to.have.been.calledOnce
       expect(tp).to.have.been.calledWith 0, 0
+      expect(@scheduler._priorityAppIndex).to.deep.equal [0, 0, 0]
 
-    it 'should move to the next app when current app renders and priority is \
-        top level', (done) ->
-      @scheduler._priorityIndex = 0
-      @scheduler._appIndex = 0
-      run = sinon.stub @scheduler, '_run', ->
+    it 'should reset the app index when it is out of bounds', ->
+      @scheduler._priorityIndex = 1
       tp = sinon.stub @scheduler, '_tryPriority', ->
-        new promise (resolve, reject) -> resolve()
+        then: ->
+          catch: ->
       @scheduler._strategy = [
         ['a', 'b'],
         ['c', 'd'],
         ['e']
       ]
-      @scheduler._totalAppSlots = 5
-      @scheduler._failedAppSlots = 4
+      @scheduler._priorityAppIndex = [8, 11, 3]
       @scheduler._runStep()
-        .then =>
-          expect(@scheduler._failedAppSlots).to.equal 0
-          expect(tp).to.have.been.calledOnce
-          expect(tp).to.have.been.calledWith 0, 0
-          expect(@scheduler._priorityIndex).to.equal 0
-          expect(@scheduler._appIndex).to.equal 1
-          process.nextTick ->
-            expect(run).to.have.been.calledOnce
-            done()
+      expect(tp).to.have.been.calledOnce
+      expect(tp).to.have.been.calledWith 1, 0
+      expect(@scheduler._priorityAppIndex).to.deep.equal [8, 0, 3]
 
-    it 'should reset the app index when current app renders and priority is \
-        top level', (done) ->
-      @scheduler._priorityIndex = 0
-      @scheduler._appIndex = 2
-      run = sinon.stub @scheduler, '_run', ->
-      tp = sinon.stub @scheduler, '_tryPriority', ->
-        new promise (resolve, reject) -> resolve()
-      @scheduler._strategy = [
-        ['a', 'b', 'c'],
-        ['d', 'e'],
-        ['e']
-      ]
-      @scheduler._totalAppSlots = 6
-      @scheduler._failedAppSlots = 4
-      @scheduler._runStep()
-        .then =>
-          expect(@scheduler._failedAppSlots).to.equal 0
-          expect(tp).to.have.been.calledOnce
-          expect(tp).to.have.been.calledWith 0, 2
-          expect(@scheduler._priorityIndex).to.equal 0
-          expect(@scheduler._appIndex).to.equal 0
-          process.nextTick ->
-            expect(run).to.have.been.calledOnce
-            done()
-
-    it 'should reset the app and priority index when current app renders and \
-        priority is not top level', (done) ->
+    it 'should move to the next app when current app renders', (done) ->
       @scheduler._priorityIndex = 1
-      @scheduler._appIndex = 1
       run = sinon.stub @scheduler, '_run', ->
       tp = sinon.stub @scheduler, '_tryPriority', ->
         new promise (resolve, reject) -> resolve()
       @scheduler._strategy = [
-        ['a', 'b', 'c'],
-        ['d', 'e', 'f'],
-        ['e']
+        ['a', 'b', 'c', 'd'],
+        ['e', 'f', 'g'],
+        ['h', 'i']
       ]
-      @scheduler._totalAppSlots = 7
-      @scheduler._failedAppSlots = 5
+      @scheduler._priorityAppIndex = [8, 1, 3]
+      @scheduler._totalAppSlots = 9
+      @scheduler._failedAppSlots = 4
       @scheduler._runStep()
         .then =>
           expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 1, 1
           expect(@scheduler._priorityIndex).to.equal 0
-          expect(@scheduler._appIndex).to.equal 0
+          expect(@scheduler._priorityAppIndex).to.deep.equal [0, 2, 3]
+          process.nextTick ->
+            expect(run).to.have.been.calledOnce
+            done()
+
+    it 'should reset all top level app indexes when the current app \
+        renders', (done) ->
+      @scheduler._priorityIndex = 2
+      run = sinon.stub @scheduler, '_run', ->
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        new promise (resolve, reject) -> resolve()
+      @scheduler._strategy = [
+        ['a', 'b', 'c', 'd'],
+        ['e', 'f', 'g'],
+        ['h', 'i']
+      ]
+      @scheduler._totalAppSlots = 9
+      @scheduler._failedAppSlots = 4
+      @scheduler._priorityAppIndex = [8, 3, 1]
+      @scheduler._runStep()
+        .then =>
+          expect(@scheduler._failedAppSlots).to.equal 0
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 2, 1
+          expect(@scheduler._priorityIndex).to.equal 0
+          expect(@scheduler._priorityAppIndex).to.deep.equal [0, 0, 2]
           process.nextTick ->
             expect(run).to.have.been.calledOnce
             done()
@@ -212,7 +196,6 @@ describe 'Scheduler', ->
     it 'should move to the next priority when the current priority \
         fails', (done) ->
       @scheduler._priorityIndex = 1
-      @scheduler._appIndex = 1
       run = sinon.stub @scheduler, '_run', ->
       tp = sinon.stub @scheduler, '_tryPriority', ->
         new promise (resolve, reject) -> reject()
@@ -223,13 +206,14 @@ describe 'Scheduler', ->
       ]
       @scheduler._totalAppSlots = 7
       expect(@scheduler._failedAppSlots).to.equal 0
+      @scheduler._priorityAppIndex = [8, 2, 2]
       @scheduler._runStep()
         .catch (e) =>
           expect(@scheduler._failedAppSlots).to.equal 1
           expect(tp).to.have.been.calledOnce
-          expect(tp).to.have.been.calledWith 1, 1
+          expect(tp).to.have.been.calledWith 1, 2
           expect(@scheduler._priorityIndex).to.equal 2
-          expect(@scheduler._appIndex).to.equal 0
+          @scheduler._priorityAppIndex = [8, 2, 2]
           process.nextTick =>
             expect(@trackView).to.not.have.been.called
             expect(run).to.have.been.calledOnce
@@ -238,7 +222,6 @@ describe 'Scheduler', ->
     it 'should sleep for a while and notify the user when all priority levels \
         fail', (done) ->
       @scheduler._priorityIndex = 2
-      @scheduler._appIndex = 1
       run = sinon.stub @scheduler, '_run', ->
       tp = sinon.stub @scheduler, '_tryPriority', ->
         new promise (resolve, reject) -> reject()
@@ -249,13 +232,13 @@ describe 'Scheduler', ->
       ]
       @scheduler._totalAppSlots = 7
       @scheduler._failedAppSlots = 6
+      @scheduler._priorityAppIndex = [8, 2, 0]
       @scheduler._runStep()
         .catch (e) =>
           expect(@scheduler._failedAppSlots).to.equal 0
           expect(tp).to.have.been.calledOnce
-          expect(tp).to.have.been.calledWith 2, 1
+          expect(tp).to.have.been.calledWith 2, 0
           expect(@scheduler._priorityIndex).to.equal 3
-          expect(@scheduler._appIndex).to.equal 0
           expect(@trackView).to.have.been.calledOnce
           expect(@trackView).to.have.been.calledWith '__bs'
           expect(run).to.not.have.been.called
@@ -266,7 +249,6 @@ describe 'Scheduler', ->
     it 'should not notify a black screen when there are still apps that are \
         not failed', (done) ->
       @scheduler._priorityIndex = 2
-      @scheduler._appIndex = 1
       run = sinon.stub @scheduler, '_run', ->
       tp = sinon.stub @scheduler, '_tryPriority', ->
         new promise (resolve, reject) -> reject()
@@ -277,22 +259,27 @@ describe 'Scheduler', ->
       ]
       @scheduler._totalAppSlots = 7
       @scheduler._failedAppSlots = 3
+      @scheduler._priorityAppIndex = [8, 2, 0]
       @scheduler._runStep()
         .catch (e) =>
           expect(@scheduler._failedAppSlots).to.equal 4
           expect(tp).to.have.been.calledOnce
-          expect(tp).to.have.been.calledWith 2, 1
+          expect(tp).to.have.been.calledWith 2, 0
           expect(@scheduler._priorityIndex).to.equal 3
-          expect(@scheduler._appIndex).to.equal 0
           process.nextTick =>
             expect(@trackView).to.not.have.been.called
             expect(run).to.have.been.calledOnce
             done()
 
   describe '#_run', ->
+    it 'should throw when strategy is invalid', ->
+      expect(@scheduler._strategy).to.not.be.ok
+      expect(=> @scheduler._run()).to.throw
+      @scheduler._strategy = []
+      expect(=> @scheduler._run()).to.throw
+
     it 'should try all apps in priority order when everything fails', (done) ->
       @scheduler._priorityIndex = 0
-      @scheduler._appIndex = 0
       run = sinon.stub @scheduler, '_run', =>
         if @scheduler._priorityIndex == 3
           expect(ta).to.have.callCount 7
@@ -318,6 +305,7 @@ describe 'Scheduler', ->
         ['d', 'e', 'f'],
         ['e']
       ]
+      @scheduler._priorityAppIndex = [0, 0, 0]
       @scheduler._run()
 
   describe '#_tryPriority', ->
@@ -550,6 +538,109 @@ describe 'Scheduler', ->
       expect(fv.args[1]).to.deep.equal ['app', queue, Object.keys(queue), 2]
       expect(fv.args[2]).to.deep.equal ['app', queue, Object.keys(queue), 3]
 
+    it 'should return a view when app has only one queue', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'app'
+      queue =
+        __default:  ['v1', 'v2']
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.equal 'v1'
+      expect(@scheduler._appViewIndex.app).to.equal 0
+      expect(fv).to.have.been.calledOnce
+      expect(queue).to.deep.equal
+        __default:  ['v2']
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+
+    it 'should return a view when app has more than one queue but different \
+        than the previous app', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'another-app'
+      queue =
+        __default:  ['v1', 'v2']
+        first: ['v3', 'v4']
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.equal 'v3'
+      expect(@scheduler._appViewIndex.app).to.equal 1
+      expect(fv).to.have.been.calledOnce
+      expect(queue).to.deep.equal
+        __default:  ['v1', 'v2']
+        first: ['v4']
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+
+    it 'should return a unique view when the app is the same as currently \
+        rendered one and current view is not set', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'app'
+      @scheduler._currentView = undefined
+      queue =
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v3'}, {contentId: 'v4'}]
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.deep.equal contentId: 'v3'
+      expect(@scheduler._appViewIndex.app).to.equal 1
+      expect(fv).to.have.been.calledOnce
+      expect(queue).to.deep.equal
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v4'}]
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+
+    it 'should return a unique view when the app is the same as currently \
+        rendered one and current view has a differend id', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'app'
+      @scheduler._currentView = contentId: 'other'
+      queue =
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v3'}, {contentId: 'v4'}]
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.deep.equal contentId: 'v3'
+      expect(@scheduler._appViewIndex.app).to.equal 1
+      expect(fv).to.have.been.calledOnce
+      expect(queue).to.deep.equal
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v4'}]
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+
+    it 'should skip to the next view if the current one is not unique', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'app'
+      @scheduler._currentView = contentId: 'v3'
+      queue =
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v3'}, {contentId: 'v4'}, {contentId: 'v5'}]
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.deep.equal contentId: 'v4'
+      expect(@scheduler._appViewIndex.app).to.equal 1
+      expect(fv).to.have.been.calledOnce
+      expect(queue).to.deep.equal
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v3'}, {contentId: 'v5'}]
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+
+    it 'should check other queues if current queue doesnt have a unique \
+        view', ->
+      fv = sinon.spy @scheduler, '_findView'
+      @scheduler._appViewIndex['app'] = 0
+      @scheduler._currentApp = 'app'
+      @scheduler._currentView = contentId: 'v3'
+      queue =
+        __default: [{contentId: 'v1'}, {contentId: 'v2'}]
+        first: [{contentId: 'v3'}]
+      ret = @scheduler._findView 'app', queue, Object.keys(queue), 1
+      expect(ret).to.deep.equal contentId: 'v1'
+      expect(@scheduler._appViewIndex.app).to.equal 0
+      expect(fv).to.have.been.calledTwice
+      expect(queue).to.deep.equal
+        __default: [{contentId: 'v2'}]
+        first: [{contentId: 'v3'}]
+      expect(fv.args[0]).to.deep.equal ['app', queue, Object.keys(queue), 1]
+      expect(fv.args[1]).to.deep.equal ['app', queue, Object.keys(queue), 2]
+
   describe '#_render', ->
     it 'should make a hideRenderShow and render call', (done) ->
       @scheduler._currentApp = 'app2'
@@ -565,6 +656,7 @@ describe 'Scheduler', ->
           expect(@trackView).to.have.been.calledOnce
           expect(@trackView).to.have.been.calledWith 'app1', 'label'
           expect(@scheduler._currentApp).to.equal 'app1'
+          expect(@scheduler._currentView).to.deep.equal view
           done()
 
     it 'should set the current app when hideRenderShow succeeds', (done) ->
@@ -578,10 +670,13 @@ describe 'Scheduler', ->
           expect(@hideRenderShow).to.have.been.calledWith(
             'app2', 'view-id', 'app1')
           expect(@scheduler._currentApp).to.equal 'app1'
+          expect(@scheduler._currentView).to.deep.equal view
           done()
 
     it 'should fail when hideRenderShow fails', (done) ->
       @scheduler._currentApp = 'app2'
+      @scheduler._currentView =
+        id: 'old-view'
       @hideRenderShow.returns new promise (resolve, reject) -> reject()
       view =
         viewId: 'view-id'
@@ -591,6 +686,7 @@ describe 'Scheduler', ->
           expect(@hideRenderShow).to.have.been.calledWith(
             'app2', 'view-id', 'app1')
           expect(@scheduler._currentApp).to.equal 'app2'
+          expect(@scheduler._currentView).to.deep.equal id: 'old-view'
           done()
 
   describe '#_prepareApps', ->
@@ -743,3 +839,4 @@ describe 'Scheduler', ->
         app3: true
         app4: true
       expect(@scheduler._totalAppSlots).to.equal 5
+      expect(@scheduler._priorityAppIndex).to.deep.equal [0, 0, 0]
