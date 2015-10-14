@@ -112,7 +112,7 @@ describe 'Scheduler', ->
       expect(tp).to.have.been.calledOnce
       expect(tp).to.have.been.calledWith 1, 1
 
-    it 'should reset the indexes when priority index is out of bounds', ->
+    it 'should not reset the indexes when priority index is out of bounds', ->
       @scheduler._priorityIndex = 6
       tp = sinon.stub @scheduler, '_tryPriority', ->
         then: ->
@@ -122,11 +122,11 @@ describe 'Scheduler', ->
         ['c', 'd'],
         ['e']
       ]
-      @scheduler._priorityAppIndex = [8, 1, 3]
+      @scheduler._priorityAppIndex = [1, 1, 3]
       @scheduler._runStep()
       expect(tp).to.have.been.calledOnce
-      expect(tp).to.have.been.calledWith 0, 0
-      expect(@scheduler._priorityAppIndex).to.deep.equal [0, 0, 0]
+      expect(tp).to.have.been.calledWith 0, 1
+      expect(@scheduler._priorityAppIndex).to.deep.equal [1, 1, 3]
 
     it 'should reset the app index when it is out of bounds', ->
       @scheduler._priorityIndex = 1

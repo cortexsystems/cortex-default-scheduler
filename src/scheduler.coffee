@@ -166,10 +166,7 @@ class DefaultScheduler
     new promise (resolve, reject) =>
       if @_priorityIndex >= @_strategy.length
         # During the previous step we tried all available priority levels and
-        # still failed. We need to reset all levels and start from the top.
-        for pi in [0..@_strategy.length - 1]
-          @_priorityAppIndex[pi] = 0
-
+        # still failed. We need to start from the top.
         @_priorityIndex = 0
 
       if @_priorityAppIndex[@_priorityIndex] >= \
