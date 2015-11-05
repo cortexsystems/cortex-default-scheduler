@@ -1,6 +1,6 @@
 {
   "name": "cortex-default-scheduler",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Default scheduler for Cortex applications",
   "author": "Hamza Kaya",
   "email": "help@cortexpowered.com",

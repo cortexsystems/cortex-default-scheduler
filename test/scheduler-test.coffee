@@ -233,6 +233,8 @@ describe 'Scheduler', ->
       @scheduler._totalAppSlots = 7
       @scheduler._failedAppSlots = 6
       @scheduler._priorityAppIndex = [8, 2, 0]
+      @scheduler._currentApp = 'a'
+      @scheduler._currentView = 'view'
       @scheduler._runStep()
         .catch (e) =>
           expect(@scheduler._failedAppSlots).to.equal 0
@@ -241,6 +243,8 @@ describe 'Scheduler', ->
           expect(@scheduler._priorityIndex).to.equal 3
           expect(@trackView).to.have.been.calledOnce
           expect(@trackView).to.have.been.calledWith '__bs'
+          expect(@scheduler._currentApp).to.be.undefined
+          expect(@scheduler._currentView).to.be.undefined
           expect(run).to.not.have.been.called
           @clock.tick 1000
           expect(run).to.have.been.calledOnce

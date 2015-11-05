@@ -199,6 +199,15 @@ class DefaultScheduler
             @_failedAppSlots = 0
             # All priority levels tested. Slow down and notify user.
             @_api.scheduler.trackView BLACK_SCREEN
+            # Reset the current app & view to allow duplicate content to be
+            # displayed after a black screen. Not resetting these values
+            # will cause a scheduler fail under the following conditions:
+            #   - There's only one app
+            #   - The app offers unique views
+            #   - Currently the app queue has max. number of views for that app
+            #   - All views has the same id
+            @_currentApp = undefined
+            @_currentView = undefined
             global.setTimeout @_run, 1000
           else
             process.nextTick @_run
