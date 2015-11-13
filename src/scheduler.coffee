@@ -284,10 +284,16 @@ class DefaultScheduler
           .catch reject
       else
         @_stats.appViews?[app]?.failure += 1
+        bucketsWithViews = 0
         for contentId, views of queue
           if views?.length > 0
-            @_stats.appViews?[app]?.preventDuplicates += 1
-            break
+            bucketsWithViews += 1
+
+        if bucketsWithViews > 0
+          @_stats.appViews?[app]?.preventDuplicates += 1
+        if bucketsWithViews > 1
+          # This shouldn't happen.
+          @_stats.appViews?[app]?.duplicateLogicFailures += 1
 
       reject()
 
@@ -382,10 +388,14 @@ class DefaultScheduler
       @_stats.apiCalls.prepare[app] =
         success: 0
         failure: 0
+      @_stats.apiCalls.hideRenderShow[app] =
+        success: 0
+        failure: 0
       @_stats.appViews[app] =
         success: 0
         failure: 0
         preventDuplicates: 0
+        duplicateLogicFailures: 0
       @_queues[app] = "#{DEFAULT_KEY}": []
       @_activePrepareCalls[app] = 0
       @_appViewIndex[app] = 0
