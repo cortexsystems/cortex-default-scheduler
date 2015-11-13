@@ -114,6 +114,21 @@ class DefaultScheduler
     # get reset.
     @_failedAppSlots      = 0
 
+    @_stats =
+      steps: 0
+      successfulRuns: 0
+      failedRuns: 0
+      blackScreens: 0
+      priorities: {}
+      apiCalls:
+        prepare: {}
+        hideRenderShow: {}
+      appViews: {}
+
+    printStats = =>
+      console.log JSON.stringify(@_stats)
+    setInterval printStats, 60000
+
   start: (@_api, @_strategy) ->
     @_startTime             = new Date().getTime()
     @_lastRunTime           = new Date().getTime()
@@ -163,6 +178,8 @@ class DefaultScheduler
     @_runStep()
 
   _runStep: ->
+    @_stats.steps += 1
+
     new promise (resolve, reject) =>
       if @_priorityIndex >= @_strategy.length
         # During the previous step we tried all available priority levels and
@@ -175,6 +192,8 @@ class DefaultScheduler
 
       @_tryPriority @_priorityIndex, @_priorityAppIndex[@_priorityIndex]
         .then =>
+          @_stats.successfulRuns += 1
+          @_stats.priorities?[@_priorityIndex]?.success += 1
           @_failedAppSlots = 0
           @_lastSuccessfulRunTime = new Date().getTime()
 
@@ -191,12 +210,15 @@ class DefaultScheduler
           process.nextTick @_run
           resolve()
         .catch (e) =>
+          @_stats.priorities?[@_priorityIndex]?.failure += 1
           # All apps in this priority level has failed. Move to the next level.
           @_priorityIndex += 1
           @_failedAppSlots += 1
+          @_stats.failedRuns += 1
 
           if @_failedAppSlots >= @_totalAppSlots
             @_failedAppSlots = 0
+            @_stats.blackScreens += 1
             # All priority levels tested. Slow down and notify user.
             @_api.scheduler.trackView BLACK_SCREEN
             # Reset the current app & view to allow duplicate content to be
@@ -256,9 +278,16 @@ class DefaultScheduler
 
       view = @_findView(app, queue, contentIds, @_appViewIndex[app] + 1)
       if view?
+        @_stats.appViews?[app]?.success += 1
         return @_render app, view
           .then resolve
           .catch reject
+      else
+        @_stats.appViews?[app]?.failure += 1
+        for contentId, views of queue
+          if views?.length > 0
+            @_stats.appViews?[app]?.preventDuplicates += 1
+            break
 
       reject()
 
@@ -293,6 +322,7 @@ class DefaultScheduler
     new promise (resolve, reject) =>
       @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app
         .then =>
+          @_stats.apiCalls?.hideRenderShow?[app]?.success += 1
           et = new Date().getTime()
           console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
             in #{et - st} msecs."""
@@ -300,7 +330,9 @@ class DefaultScheduler
           @_currentView = view
           @_api.scheduler.trackView app, view.contentLabel
           resolve()
-        .catch reject
+        .catch (e) =>
+          @_stats.apiCalls?.hideRenderShow?[app]?.failure += 1
+          reject e
 
   _prepareApps: ->
     for app, s of @_apps
@@ -324,6 +356,7 @@ class DefaultScheduler
       @_activePrepareCalls[app] = @_activePrepareCalls[app] + 1
       @_api.scheduler.prepare app
         .then (resp) =>
+          @_stats.apiCalls?.prepare?[app]?.success += 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           if not not resp?.viewId
             viewId = resp.viewId
@@ -337,6 +370,7 @@ class DefaultScheduler
               contentLabel: contentLabel
           resolve()
         .catch (e) =>
+          @_stats.apiCalls?.prepare?[app]?.failure += 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           console.error "prepare() call failed for app #{app}.", e
           reject e
@@ -345,13 +379,23 @@ class DefaultScheduler
     @_queues = {}
     @_activePrepareCalls = {}
     for app, s of @_apps
+      @_stats.apiCalls.prepare[app] =
+        success: 0
+        failure: 0
+      @_stats.appViews[app] =
+        success: 0
+        failure: 0
+        preventDuplicates: 0
       @_queues[app] = "#{DEFAULT_KEY}": []
       @_activePrepareCalls[app] = 0
       @_appViewIndex[app] = 0
 
   _extractAppList: (strategy) ->
     apps = {}
-    for priority in strategy
+    for priority, idx in strategy
+      @_stats.priorities[idx] =
+        success: 0
+        failure: 0
       @_priorityAppIndex.push 0
       for app in priority
         @_totalAppSlots += 1
