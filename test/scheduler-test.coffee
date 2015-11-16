@@ -7,7 +7,6 @@ promise   = require 'promise'
   DefaultScheduler,
   DEFAULT_KEY,
   BLACK_SCREEN,
-  BUFFERED_VIEWS_PER_APP,
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
   HC_SUCCESSFUL_RUN_CALL_THRESHOLD
@@ -18,13 +17,14 @@ describe 'Scheduler', ->
     @hideRenderShow = sinon.stub()
     @prepare = sinon.stub()
     @trackView = sinon.stub()
+    @bufferedViewsPerApp = 2
     @api =
       scheduler:
         prepare: @prepare
         hideRenderShow: @hideRenderShow
         trackView: @trackView
     @clock = sinon.useFakeTimers()
-    @scheduler = new DefaultScheduler()
+    @scheduler = new DefaultScheduler @bufferedViewsPerApp
     @scheduler._api = @api
 
   afterEach ->
@@ -694,7 +694,7 @@ describe 'Scheduler', ->
           done()
 
   describe '#_prepareApps', ->
-    it 'should call prepare() BUFFERED_VIEWS_PER_APP times for each app', ->
+    it 'should call prepare() bufferedViewsPerApp times for each app', ->
       prepare = sinon.stub @scheduler, '_prepare'
       @scheduler._apps =
         app1: true
@@ -706,7 +706,7 @@ describe 'Scheduler', ->
         app3: 0
 
       @scheduler._prepareApps()
-      expect(prepare).to.have.callCount 3 * BUFFERED_VIEWS_PER_APP
+      expect(prepare).to.have.callCount 3 * @bufferedViewsPerApp
 
     it 'should make less prepare() calls when there are active calls', ->
       prepare = sinon.stub @scheduler, '_prepare'
@@ -720,8 +720,8 @@ describe 'Scheduler', ->
         app3: 5
 
       @scheduler._prepareApps()
-      # BUFFERED_VIEWS_PER_APPx app1, 1x app2
-      expect(prepare).to.have.callCount BUFFERED_VIEWS_PER_APP + 1
+      # bufferedViewsPerApp x app1, 1x app2
+      expect(prepare).to.have.callCount @bufferedViewsPerApp + 1
 
     it 'should make less prepare() calls when queues are not empty', ->
       prepare = sinon.stub @scheduler, '_prepare'

@@ -17,5 +17,11 @@
         "screenshot4": "",
         "screenshot5": ""
     },
-    "parameters": []
+    "parameters": [
+        {
+            "name": "cortex.default_scheduler.buffer_len",
+            "default": "2",
+            "description": "The number of views to be buffered per application."
+        }
+    ]
 }

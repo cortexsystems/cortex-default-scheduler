@@ -2,7 +2,6 @@ promise = require 'promise'
 
 DEFAULT_KEY                       = '__default'
 BLACK_SCREEN                      = '__bs'
-BUFFERED_VIEWS_PER_APP            = 2
 # Health checks are disabled right after the scheduler starts for
 # HC_WARMUP_DURATION msecs.
 HC_WARMUP_DURATION                = 60 * 1000
@@ -79,7 +78,7 @@ HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
 # the same id as the currently rendered view.
 #
 class DefaultScheduler
-  constructor: ->
+  constructor: (@_bufferedViewsPerApp) ->
     # The last successfully rendered app.
     @_currentApp          = undefined
     # The last successfully rendered view.
@@ -348,9 +347,9 @@ class DefaultScheduler
         viewCnt = 0
         for v, q of appQ
           viewCnt += q?.length || 0
-        reqCnt = BUFFERED_VIEWS_PER_APP - viewCnt
+        reqCnt = @_bufferedViewsPerApp - viewCnt
       else
-        reqCnt = BUFFERED_VIEWS_PER_APP
+        reqCnt = @_bufferedViewsPerApp
 
       reqCnt = reqCnt - @_activePrepareCalls[app]
       if reqCnt > 0
@@ -417,7 +416,6 @@ module.exports = {
   DefaultScheduler,
   DEFAULT_KEY,
   BLACK_SCREEN,
-  BUFFERED_VIEWS_PER_APP,
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
   HC_SUCCESSFUL_RUN_CALL_THRESHOLD
