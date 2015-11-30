@@ -9,7 +9,8 @@ promise   = require 'promise'
   BLACK_SCREEN,
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
-  HC_SUCCESSFUL_RUN_CALL_THRESHOLD
+  HC_SUCCESSFUL_RUN_CALL_THRESHOLD,
+  PREPARE_TIMEOUT
 } = require '../src/scheduler'
 
 describe 'Scheduler', ->
@@ -761,6 +762,21 @@ describe 'Scheduler', ->
           done()
 
       expect(@scheduler._activePrepareCalls['app']).to.equal 2
+
+    it "should expire the call when the app doesn't reply back in \
+        time", (done) ->
+      @prepare.returns new promise (resolve, reject) -> # don't resolve/reject
+      @scheduler._activePrepareCalls =
+        app: 1
+      @scheduler._prepare 'app'
+        .catch =>
+          expect(@scheduler._activePrepareCalls['app']).to.equal 1
+          expect(@prepare).to.have.been.calledOnce
+          expect(@prepare).to.have.been.calledWith 'app'
+          done()
+
+      expect(@scheduler._activePrepareCalls['app']).to.equal 2
+      @clock.tick PREPARE_TIMEOUT
 
     it 'should add view to the default queue when contentId is \
         empty', (done) ->

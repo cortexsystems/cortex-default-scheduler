@@ -12,6 +12,10 @@ HC_RUN_CALL_THRESHOLD             = 3 * 60 * 1000
 # checks when this threshold is exceeded.
 HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
 
+# Time to wait for the app to reply back to the prepare() call. Timeout
+# value should be high enough to compensate slow connections.
+PREPARE_TIMEOUT                   = 5 * 60 * 1000
+
 # A basic Cortex scheduler.
 #
 # This scheduler accepts a strategy and runs one app at a time fullscreen.
@@ -359,8 +363,18 @@ class DefaultScheduler
   _prepare: (app) ->
     new promise (resolve, reject) =>
       @_activePrepareCalls[app] = @_activePrepareCalls[app] + 1
+
+      expire = =>
+        @_stats.apiCalls?.prepare?[app]?.failure += 1
+        @_stats.apiCalls?.prepare?[app]?.timeout += 1
+        @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
+        console.error "prepare() call timed out for app #{app}."
+        reject new Error("prepare() call timed out.")
+      timer = setTimeout expire, PREPARE_TIMEOUT
+
       @_api.scheduler.prepare app
         .then (resp) =>
+          clearTimeout timer
           @_stats.apiCalls?.prepare?[app]?.success += 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           if not not resp?.viewId
@@ -375,6 +389,7 @@ class DefaultScheduler
               contentLabel: contentLabel
           resolve()
         .catch (e) =>
+          clearTimeout timer
           @_stats.apiCalls?.prepare?[app]?.failure += 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           console.error "prepare() call failed for app #{app}.", e
@@ -387,6 +402,7 @@ class DefaultScheduler
       @_stats.apiCalls.prepare[app] =
         success: 0
         failure: 0
+        timeout: 0
       @_stats.apiCalls.hideRenderShow[app] =
         success: 0
         failure: 0
@@ -418,5 +434,6 @@ module.exports = {
   BLACK_SCREEN,
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
-  HC_SUCCESSFUL_RUN_CALL_THRESHOLD
+  HC_SUCCESSFUL_RUN_CALL_THRESHOLD,
+  PREPARE_TIMEOUT
 }
