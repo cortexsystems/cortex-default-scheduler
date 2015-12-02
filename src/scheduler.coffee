@@ -329,8 +329,10 @@ class DefaultScheduler
     console.log "Rendering #{app}/#{view.contentId}/#{view.viewId}."
     st = new Date().getTime()
     new promise (resolve, reject) =>
+      @_stats.apiCalls?.hideRenderShow?[app]?.active += 1
       @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app
         .then =>
+          @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
           @_stats.apiCalls?.hideRenderShow?[app]?.success += 1
           et = new Date().getTime()
           console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
@@ -340,6 +342,7 @@ class DefaultScheduler
           @_api.scheduler.trackView app, view.contentLabel
           resolve()
         .catch (e) =>
+          @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
           @_stats.apiCalls?.hideRenderShow?[app]?.failure += 1
           reject e
 
@@ -363,10 +366,12 @@ class DefaultScheduler
   _prepare: (app) ->
     new promise (resolve, reject) =>
       @_activePrepareCalls[app] = @_activePrepareCalls[app] + 1
+      @_stats.apiCalls?.prepare?[app]?.active += 1
 
       expire = =>
         @_stats.apiCalls?.prepare?[app]?.failure += 1
         @_stats.apiCalls?.prepare?[app]?.timeout += 1
+        @_stats.apiCalls?.prepare?[app]?.active -= 1
         @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
         console.error "prepare() call timed out for app #{app}."
         reject new Error("prepare() call timed out.")
@@ -377,6 +382,7 @@ class DefaultScheduler
           clearTimeout timer
           @_stats.apiCalls?.prepare?[app]?.success += 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
+          @_stats.apiCalls?.prepare?[app]?.active -= 1
           if not not resp?.viewId
             viewId = resp.viewId
             contentId = resp?.contentId || DEFAULT_KEY
@@ -391,6 +397,7 @@ class DefaultScheduler
         .catch (e) =>
           clearTimeout timer
           @_stats.apiCalls?.prepare?[app]?.failure += 1
+          @_stats.apiCalls?.prepare?[app]?.active -= 1
           @_activePrepareCalls[app] = @_activePrepareCalls[app] - 1
           console.error "prepare() call failed for app #{app}.", e
           reject e
@@ -403,9 +410,11 @@ class DefaultScheduler
         success: 0
         failure: 0
         timeout: 0
+        active:  0
       @_stats.apiCalls.hideRenderShow[app] =
         success: 0
         failure: 0
+        active:  0
       @_stats.appViews[app] =
         success: 0
         failure: 0
