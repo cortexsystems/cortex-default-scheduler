@@ -11,10 +11,12 @@ HC_RUN_CALL_THRESHOLD             = 3 * 60 * 1000
 # Time between two successful renders. Scheduler will fail the health
 # checks when this threshold is exceeded.
 HC_SUCCESSFUL_RUN_CALL_THRESHOLD  = 3 * 60 * 1000
-
 # Time to wait for the app to reply back to the prepare() call. Timeout
 # value should be high enough to compensate slow connections.
 PREPARE_TIMEOUT                   = 5 * 60 * 1000
+# The scheduler will allow rendering only a number of immediate views
+# per app.
+MAX_IMMEDIATE_VIEWS_PER_APP       = 3
 
 # A basic Cortex scheduler.
 #
@@ -81,6 +83,16 @@ PREPARE_TIMEOUT                   = 5 * 60 * 1000
 # tested app is the same as the currently rendered one and the tested view has
 # the same id as the currently rendered view.
 #
+# Immediate Views:
+# The scheduler accepts immediate views from apps with requestFocus() calls.
+# Immediate views are kept in separate queues and at the beginning of a step
+# the scheduler will try to render an immediate view first. To give regular
+# views a chance, the scheduler limits consecutive immediate views to
+# MAX_IMMEDIATE_VIEWS_PER_APP. A black screen or a regular view will reset
+# the counters.
+#
+# Immediate views are also subject to duplicate content prevention.
+#
 class DefaultScheduler
   constructor: (@_bufferedViewsPerApp) ->
     # The last successfully rendered app.
@@ -94,11 +106,24 @@ class DefaultScheduler
     # calls. e.g.
     # @_queues = {
     #   'app1': {
-    #     '__default': ['v1', 'v2'],
-    #     'content-id-1': ['v3', 'v4']}
+    #     '__default': [{viewId: 'v1'}, {viewId: 'v2'}],
+    #     'content-id-1': [{viewId: 'v3', contentLabel: 'c3'}]
     #   'app2': {
-    #     '__default': ['v1', 'v2']}
+    #     '__default': [...]
     @_queues              = {}
+    # Views submitted using requestFocus(). Scheduler will prioritize these
+    # views over any view in @_queues.
+    # @_immediateViewsQueue = {
+    #   'app1': [{viewId: 'v1'}, {viewId: 'v2', contentId: 'v2'}],
+    #   'app2': [...]
+    @_immediateViewQueues = {}
+    # Keeps track of consecutive immediate views. An application can take
+    # control of the screen by constantly submitting views using
+    # requestFocus(). To prevent this, the scheduler will render only a
+    # number of views from an app consecutively. After an app hits the
+    # threshold the scheduler will try to render a view from reqular
+    # queues.
+    @_consecutiveImmediateRenders = {}
     # Keeps track of prepare() calls made to the apps in order not to flood
     # apps.
     @_activePrepareCalls  = {}
@@ -123,13 +148,31 @@ class DefaultScheduler
       failedRuns: 0
       blackScreens: 0
       priorities: {}
+      immidiateViews: {}
       apiCalls:
         prepare: {}
+        requestFocus: {}
         hideRenderShow: {}
       appViews: {}
 
     printStats = =>
-      console.log JSON.stringify(@_stats)
+      regular = {}
+      for app, queue of @_queues
+        total = 0
+        for qname, views of queue
+          total += views.length
+        regular[app] = total
+
+      immediate = {}
+      for app, queue of @_immediateViewQueues
+        immediate[app] = queue.length
+
+      stats =
+        regularViews: regular
+        immediateViews: immediate
+        stats: @_stats
+      console.log JSON.stringify(stats)
+
     setInterval printStats, 60000
 
   start: (@_api, @_strategy) ->
@@ -141,6 +184,7 @@ class DefaultScheduler
     @_initPriorityQueues()
 
     @_api.scheduler.onAppCrash @_onAppCrash
+    @_api.scheduler.onRequestFocus @_onRequestFocus
 
     @_run()
 
@@ -150,6 +194,18 @@ class DefaultScheduler
     console.log "Received an app crash: #{appId}"
     @_queues[appId] = "#{DEFAULT_KEY}": []
     @_activePrepareCalls[appId] = 0
+
+  _onRequestFocus: (app, view) =>
+    if not (app of @_apps) or not view?.viewId
+      @_stats.apiCalls?.requestFocus?[app]?.failure += 1
+      return
+
+    @_immediateViewQueues[app].push
+      viewId: view?.viewId
+      contentId: view?.contentId
+      contentLabel: view?.contentLabel
+
+    @_stats.apiCalls?.requestFocus?[app]?.success += 1
 
   _onHealthCheck: (report) =>
     now = new Date().getTime()
@@ -184,59 +240,102 @@ class DefaultScheduler
     @_stats.steps += 1
 
     new promise (resolve, reject) =>
-      if @_priorityIndex >= @_strategy.length
-        # During the previous step we tried all available priority levels and
-        # still failed. We need to start from the top.
-        @_priorityIndex = 0
+      @_tryImmediateView()
+        .then resolve
+        .catch =>
+          if @_priorityIndex >= @_strategy.length
+            # During the previous step we tried all available priority levels
+            # and still failed. We need to start from the top.
+            @_priorityIndex = 0
 
-      if @_priorityAppIndex[@_priorityIndex] >= \
-          @_strategy[@_priorityIndex].length
-        @_priorityAppIndex[@_priorityIndex] = 0
+          if @_priorityAppIndex[@_priorityIndex] >= \
+              @_strategy[@_priorityIndex].length
+            @_priorityAppIndex[@_priorityIndex] = 0
 
-      @_tryPriority @_priorityIndex, @_priorityAppIndex[@_priorityIndex]
-        .then =>
-          @_stats.successfulRuns += 1
-          @_stats.priorities?[@_priorityIndex]?.success += 1
-          @_failedAppSlots = 0
-          @_lastSuccessfulRunTime = new Date().getTime()
+          @_tryPriority @_priorityIndex, @_priorityAppIndex[@_priorityIndex]
+            .then =>
+              @_stepSucceeded()
+              resolve()
+            .catch (e) =>
+              @_stepFailed()
+              reject e
 
-          # Move to the next app in the same priority level.
-          @_priorityAppIndex[@_priorityIndex] += 1
+  _stepSucceeded: ->
+    @_stats.successfulRuns += 1
+    @_stats.priorities?[@_priorityIndex]?.success += 1
+    @_failedAppSlots = 0
+    @_lastSuccessfulRunTime = new Date().getTime()
 
-          # Next step will start from the top. We need to reset app indexes in
-          # all higher priority levels.
-          if @_priorityIndex != 0
-            for pi in [0..@_priorityIndex - 1]
-              @_priorityAppIndex[pi] = 0
-          @_priorityIndex = 0
+    # Move to the next app in the same priority level.
+    @_priorityAppIndex[@_priorityIndex] += 1
 
-          process.nextTick @_run
-          resolve()
-        .catch (e) =>
-          @_stats.priorities?[@_priorityIndex]?.failure += 1
-          # All apps in this priority level has failed. Move to the next level.
-          @_priorityIndex += 1
-          @_failedAppSlots += 1
-          @_stats.failedRuns += 1
+    # Next step will start from the top. We need to reset app indexes in
+    # all higher priority levels.
+    if @_priorityIndex != 0
+      for pi in [0..@_priorityIndex - 1]
+        @_priorityAppIndex[pi] = 0
+    @_priorityIndex = 0
 
-          if @_failedAppSlots >= @_totalAppSlots
-            @_failedAppSlots = 0
-            @_stats.blackScreens += 1
-            # All priority levels tested. Slow down and notify user.
-            @_api.scheduler.trackView BLACK_SCREEN
-            # Reset the current app & view to allow duplicate content to be
-            # displayed after a black screen. Not resetting these values
-            # will cause a scheduler fail under the following conditions:
-            #   - There's only one app
-            #   - The app offers unique views
-            #   - Currently the app queue has max. number of views for that app
-            #   - All views has the same id
-            @_currentApp = undefined
-            @_currentView = undefined
-            global.setTimeout @_run, 1000
-          else
-            process.nextTick @_run
-          reject e
+    @_resetImmediateViewCounters()
+    process.nextTick @_run
+
+  _stepFailed: ->
+    @_stats.priorities?[@_priorityIndex]?.failure += 1
+    # All apps in this priority level has failed. Move to the next level.
+    @_priorityIndex += 1
+    @_failedAppSlots += 1
+    @_stats.failedRuns += 1
+
+    if @_failedAppSlots >= @_totalAppSlots
+      @_failedAppSlots = 0
+      @_stats.blackScreens += 1
+      # All priority levels tested. Slow down and notify user.
+      @_api.scheduler.trackView BLACK_SCREEN
+      # Reset the current app & view to allow duplicate content to be
+      # displayed after a black screen. Not resetting these values
+      # will cause a scheduler fail under the following conditions:
+      #   - There's only one app
+      #   - The app offers unique views
+      #   - Currently the app queue has max. number of views for that app
+      #   - All views has the same id
+      @_currentApp = undefined
+      @_currentView = undefined
+      @_resetImmediateViewCounters()
+      global.setTimeout @_run, 1000
+    else
+      process.nextTick @_run
+
+  _resetImmediateViewCounters: ->
+    for app, s of @_apps
+      @_consecutiveImmediateRenders[app] = 0
+
+  _tryImmediateView: ->
+    new promise (resolve, reject) =>
+      for app, views of @_immediateViewQueues
+        if @_consecutiveImmediateRenders[app] >= MAX_IMMEDIATE_VIEWS_PER_APP
+          continue
+
+        if views.length == 0
+          continue
+
+        for view, idx in views
+          if @_currentApp == app and \
+              view?.contentId == @_currentView?.contentId
+            @_stats?.immidiateViews?[app]?.preventDuplicates += 1
+            continue
+
+          deleted = views.splice(idx, 1)
+          @_render app, deleted[0]
+            .then =>
+              @_stats?.immidiateViews?[app]?.success += 1
+              @_consecutiveImmediateRenders[app] += 1
+              resolve()
+            .catch (e) =>
+              @_stats?.immidiateViews?[app]?.failure += 1
+              reject e
+          return
+
+      reject()
 
   _tryPriority: (priorityIndex, appIndex) ->
     new promise (resolve, reject) =>
@@ -411,6 +510,9 @@ class DefaultScheduler
         failure: 0
         timeout: 0
         active:  0
+      @_stats.apiCalls.requestFocus[app] =
+        success: 0
+        failure: 0
       @_stats.apiCalls.hideRenderShow[app] =
         success: 0
         failure: 0
@@ -420,7 +522,13 @@ class DefaultScheduler
         failure: 0
         preventDuplicates: 0
         duplicateLogicFailures: 0
+      @_stats.immidiateViews[app] =
+        success: 0
+        failure: 0
+        preventDuplicates: 0
       @_queues[app] = "#{DEFAULT_KEY}": []
+      @_immediateViewQueues[app] = []
+      @_consecutiveImmediateRenders[app] = 0
       @_activePrepareCalls[app] = 0
       @_appViewIndex[app] = 0
 
@@ -444,5 +552,6 @@ module.exports = {
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
   HC_SUCCESSFUL_RUN_CALL_THRESHOLD,
-  PREPARE_TIMEOUT
+  PREPARE_TIMEOUT,
+  MAX_IMMEDIATE_VIEWS_PER_APP
 }

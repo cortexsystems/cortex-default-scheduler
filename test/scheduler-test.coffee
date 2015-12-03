@@ -10,7 +10,8 @@ promise   = require 'promise'
   HC_WARMUP_DURATION,
   HC_RUN_CALL_THRESHOLD,
   HC_SUCCESSFUL_RUN_CALL_THRESHOLD,
-  PREPARE_TIMEOUT
+  PREPARE_TIMEOUT,
+  MAX_IMMEDIATE_VIEWS_PER_APP
 } = require '../src/scheduler'
 
 describe 'Scheduler', ->
@@ -43,6 +44,57 @@ describe 'Scheduler', ->
         'app-id':
           '__default': []
       expect(@scheduler._activePrepareCalls['app-id']).to.equal 0
+
+  describe '#_onRequestFocus', ->
+    it 'should return silently when app id is invalid', ->
+      @scheduler._apps =
+        app1: true
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus undefined, {viewId: 'view'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus '', {viewId: 'view'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus 'app2', {viewId: 'view'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+
+    it 'should return silently when view id is invalid', ->
+      @scheduler._apps =
+        app1: true
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus 'app1', {}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus 'app1', {viewId: undefined}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+      @scheduler._onRequestFocus 'app1', {viewId: ''}
+      expect(@scheduler._immediateViewQueues).to.deep.equal {}
+
+    it 'should add the view to the immediate queue', ->
+      @scheduler._apps =
+        app1: true
+        app2: true
+      @scheduler._immediateViewQueues =
+        app1: []
+        app2: ['v']
+      @scheduler._onRequestFocus 'app1', {viewId: 'v1'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        app1: [{viewId: 'v1', contentId: undefined, contentLabel: undefined}]
+        app2: ['v']
+
+      @scheduler._onRequestFocus 'app1', {viewId: 'v2', contentId: 'v2'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        app1: [
+          {viewId: 'v1', contentId: undefined, contentLabel: undefined}
+          {viewId: 'v2', contentId: 'v2', contentLabel: undefined}
+        ]
+        app2: ['v']
+      @scheduler._onRequestFocus 'app2', {
+        viewId: 'v3', contentId: 'v3', contentLabel: 'v3'}
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        app1: [
+          {viewId: 'v1', contentId: undefined, contentLabel: undefined}
+          {viewId: 'v2', contentId: 'v2', contentLabel: undefined}
+        ]
+        app2: ['v', {viewId: 'v3', contentId: 'v3', contentLabel: 'v3'}]
 
   describe '#_onHealthCheck', ->
     it 'should succeed during the warmup period', ->
@@ -98,11 +150,26 @@ describe 'Scheduler', ->
       expect(report).to.have.been.calledWith status: true
 
   describe '#_runStep', ->
-    it 'should try an app of a priority', ->
+    it 'should try an immediate view first', (done) ->
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        promise.reject()
+      ti = sinon.stub @scheduler, '_tryImmediateView', ->
+        promise.resolve()
+      @scheduler._runStep()
+        .then ->
+          expect(ti).to.have.been.calledOnce
+          expect(tp).to.not.have.been.called
+          done()
+
+    it 'should reset immediate view counters when priority fails', (done) ->
       @scheduler._priorityIndex = 1
       tp = sinon.stub @scheduler, '_tryPriority', ->
-        then: ->
-          catch: ->
+        promise.reject()
+      @scheduler._apps =
+        app1: true
+      @scheduler._immediateViewQueues = {}
+      @scheduler._consecutiveImmediateRenders =
+        app1: 9
       @scheduler._strategy = [
         ['a', 'b'],
         ['c', 'd'],
@@ -110,14 +177,64 @@ describe 'Scheduler', ->
       ]
       @scheduler._priorityAppIndex = [0, 1, 0]
       @scheduler._runStep()
-      expect(tp).to.have.been.calledOnce
-      expect(tp).to.have.been.calledWith 1, 1
+        .catch =>
+          expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+            app1: 0
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 1, 1
+          done()
 
-    it 'should not reset the indexes when priority index is out of bounds', ->
+    it 'should reset immediate view counters when priority succeeds', (done) ->
+      @scheduler._priorityIndex = 1
+      run = sinon.stub @scheduler, '_run', ->
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        new promise (resolve, reject) -> resolve()
+      @scheduler._apps =
+        app1: true
+      @scheduler._immediateViewQueues = {}
+      @scheduler._consecutiveImmediateRenders =
+        app1: 9
+      @scheduler._strategy = [
+        ['a', 'b', 'c', 'd'],
+        ['e', 'f', 'g'],
+        ['h', 'i']
+      ]
+      @scheduler._priorityAppIndex = [8, 1, 3]
+      @scheduler._totalAppSlots = 9
+      @scheduler._failedAppSlots = 4
+      @scheduler._runStep()
+        .then =>
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 1, 1
+          expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+            app1: 0
+          done()
+
+    it 'should try an app of a priority', (done) ->
+      @scheduler._priorityIndex = 1
+      tp = sinon.stub @scheduler, '_tryPriority', ->
+        promise.reject()
+      @scheduler._immediateViewQueues = {}
+      @scheduler._consecutiveImmediateRenders = {}
+      @scheduler._strategy = [
+        ['a', 'b'],
+        ['c', 'd'],
+        ['e']
+      ]
+      @scheduler._priorityAppIndex = [0, 1, 0]
+      @scheduler._runStep()
+        .catch ->
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 1, 1
+          done()
+
+    it 'should not reset the indexes when priority index is out of \
+        bounds', (done) ->
       @scheduler._priorityIndex = 6
       tp = sinon.stub @scheduler, '_tryPriority', ->
-        then: ->
-          catch: ->
+        promise.reject()
+      @scheduler._immediateViewQueues = {}
+      @scheduler._consecutiveImmediateRenders = {}
       @scheduler._strategy = [
         ['a', 'b'],
         ['c', 'd'],
@@ -125,15 +242,16 @@ describe 'Scheduler', ->
       ]
       @scheduler._priorityAppIndex = [1, 1, 3]
       @scheduler._runStep()
-      expect(tp).to.have.been.calledOnce
-      expect(tp).to.have.been.calledWith 0, 1
-      expect(@scheduler._priorityAppIndex).to.deep.equal [1, 1, 3]
+        .catch =>
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 0, 1
+          expect(@scheduler._priorityAppIndex).to.deep.equal [1, 1, 3]
+          done()
 
-    it 'should reset the app index when it is out of bounds', ->
+    it 'should reset the app index when it is out of bounds', (done) ->
       @scheduler._priorityIndex = 1
       tp = sinon.stub @scheduler, '_tryPriority', ->
-        then: ->
-          catch: ->
+        promise.reject()
       @scheduler._strategy = [
         ['a', 'b'],
         ['c', 'd'],
@@ -141,9 +259,11 @@ describe 'Scheduler', ->
       ]
       @scheduler._priorityAppIndex = [8, 11, 3]
       @scheduler._runStep()
-      expect(tp).to.have.been.calledOnce
-      expect(tp).to.have.been.calledWith 1, 0
-      expect(@scheduler._priorityAppIndex).to.deep.equal [8, 0, 3]
+        .catch =>
+          expect(tp).to.have.been.calledOnce
+          expect(tp).to.have.been.calledWith 1, 0
+          expect(@scheduler._priorityAppIndex).to.deep.equal [8, 0, 3]
+          done()
 
     it 'should move to the next app when current app renders', (done) ->
       @scheduler._priorityIndex = 1
@@ -312,6 +432,93 @@ describe 'Scheduler', ->
       ]
       @scheduler._priorityAppIndex = [0, 0, 0]
       @scheduler._run()
+
+  describe '#_tryImmediateView', ->
+    it 'should fail when there are no apps', (done) ->
+      render = sinon.spy @scheduler, '_render'
+      @scheduler._tryImmediateView()
+        .catch ->
+          expect(render).to.not.have.been.called
+          done()
+
+    it 'should fail when there are no views', (done) ->
+      render = sinon.spy @scheduler, '_render'
+      @scheduler._immediateViewQueues =
+        app1: []
+        app2: []
+      @scheduler._tryImmediateView()
+        .catch ->
+          expect(render).to.not.have.been.called
+          done()
+
+    it 'should fail when all apps exceed threshold', (done) ->
+      render = sinon.spy @scheduler, '_render'
+      @scheduler._immediateViewQueues =
+        app1: ['v1', 'v2']
+        app2: ['v3']
+      @scheduler._consecutiveImmediateRenders =
+        app1: MAX_IMMEDIATE_VIEWS_PER_APP
+        app2: MAX_IMMEDIATE_VIEWS_PER_APP + 3
+
+      @scheduler._tryImmediateView()
+        .catch ->
+          expect(render).to.not.have.been.called
+          done()
+
+    it 'should not render a duplicate view', (done) ->
+      render = sinon.spy @scheduler, '_render'
+      @scheduler._immediateViewQueues =
+        app1: [{viewId: 'view-id', contentId: 'content-id'}]
+      @scheduler._consecutiveImmediateRenders =
+        app1: 0
+      @scheduler._currentApp = 'app1'
+      @scheduler._currentView = {viewId: 'other', contentId: 'content-id'}
+      @scheduler._tryImmediateView()
+        .catch ->
+          expect(render).to.not.have.been.called
+          done()
+
+    it 'should fail when render fails', (done) ->
+      render = sinon.stub @scheduler, '_render', ->
+        promise.reject()
+      @scheduler._immediateViewQueues =
+        app1: [{viewId: 'view-id', contentId: 'content-id'}]
+      @scheduler._consecutiveImmediateRenders =
+        app1: 0
+      @scheduler._currentApp = 'app2'
+      @scheduler._currentView = {viewId: 'other', contentId: 'content-id'}
+      @scheduler._tryImmediateView()
+        .catch =>
+          expect(@scheduler._immediateViewQueues).to.deep.equal
+            app1: []
+          expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+            app1: 0
+          expect(render).to.have.been.calledOnce
+          expect(render.args[0][0]).to.equal 'app1'
+          expect(render.args[0][1]).to.deep.equal
+            viewId: 'view-id'
+            contentId: 'content-id'
+          done()
+
+    it 'should succeed when render succeeds', (done) ->
+      render = sinon.stub @scheduler, '_render', ->
+        promise.resolve()
+      @scheduler._immediateViewQueues =
+        app1: [{viewId: 'view-id', contentId: 'content-id'}]
+      @scheduler._consecutiveImmediateRenders =
+        app1: 0
+      @scheduler._tryImmediateView()
+        .then =>
+          expect(@scheduler._immediateViewQueues).to.deep.equal
+            app1: []
+          expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+            app1: 1
+          expect(render).to.have.been.calledOnce
+          expect(render.args[0][0]).to.equal 'app1'
+          expect(render.args[0][1]).to.deep.equal
+            viewId: 'view-id'
+            contentId: 'content-id'
+          done()
 
   describe '#_tryPriority', ->
     it 'should fail when strategy is invalid', (done) ->
@@ -840,6 +1047,12 @@ describe 'Scheduler', ->
           __default: []
         app2:
           __default: []
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        app1: []
+        app2: []
+      expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+        app1: 0
+        app2: 0
       expect(@scheduler._activePrepareCalls).to.deep.equal
         app1: 0
         app2: 0
