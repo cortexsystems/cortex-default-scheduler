@@ -241,7 +241,10 @@ class DefaultScheduler
 
     new promise (resolve, reject) =>
       @_tryImmediateView()
-        .then resolve
+        .then =>
+          @_stats.successfulRuns += 1
+          process.nextTick @_run
+          resolve()
         .catch =>
           if @_priorityIndex >= @_strategy.length
             # During the previous step we tried all available priority levels
@@ -281,6 +284,7 @@ class DefaultScheduler
 
   _stepFailed: ->
     @_stats.priorities?[@_priorityIndex]?.failure += 1
+    @_priorityAppIndex[@_priorityIndex] = 0
     # All apps in this priority level has failed. Move to the next level.
     @_priorityIndex += 1
     @_failedAppSlots += 1

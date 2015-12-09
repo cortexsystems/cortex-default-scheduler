@@ -151,6 +151,7 @@ describe 'Scheduler', ->
 
   describe '#_runStep', ->
     it 'should try an immediate view first', (done) ->
+      run = sinon.stub @scheduler, '_run', ->
       tp = sinon.stub @scheduler, '_tryPriority', ->
         promise.reject()
       ti = sinon.stub @scheduler, '_tryImmediateView', ->
@@ -159,7 +160,9 @@ describe 'Scheduler', ->
         .then ->
           expect(ti).to.have.been.calledOnce
           expect(tp).to.not.have.been.called
-          done()
+          process.nextTick ->
+            expect(run).to.have.been.calledOnce
+            done()
 
     it 'should reset immediate view counters when priority fails', (done) ->
       @scheduler._priorityIndex = 1
@@ -228,8 +231,8 @@ describe 'Scheduler', ->
           expect(tp).to.have.been.calledWith 1, 1
           done()
 
-    it 'should not reset the indexes when priority index is out of \
-        bounds', (done) ->
+    it 'should only reset the index for the current priority level when \
+        priority index is out of bounds', (done) ->
       @scheduler._priorityIndex = 6
       tp = sinon.stub @scheduler, '_tryPriority', ->
         promise.reject()
@@ -245,7 +248,7 @@ describe 'Scheduler', ->
         .catch =>
           expect(tp).to.have.been.calledOnce
           expect(tp).to.have.been.calledWith 0, 1
-          expect(@scheduler._priorityAppIndex).to.deep.equal [1, 1, 3]
+          expect(@scheduler._priorityAppIndex).to.deep.equal [0, 1, 3]
           done()
 
     it 'should reset the app index when it is out of bounds', (done) ->
