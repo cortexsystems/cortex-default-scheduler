@@ -481,6 +481,27 @@ describe 'Scheduler', ->
           expect(render).to.not.have.been.called
           done()
 
+    it 'should render when content id is empty', (done) ->
+      render = sinon.stub @scheduler, '_render', ->
+        promise.reject()
+      @scheduler._immediateViewQueues =
+        app1: [{viewId: 'view-id'}]
+      @scheduler._consecutiveImmediateRenders =
+        app1: 0
+      @scheduler._currentApp = 'app2'
+      @scheduler._currentView = {viewId: 'other'}
+      @scheduler._tryImmediateView()
+        .catch =>
+          expect(@scheduler._immediateViewQueues).to.deep.equal
+            app1: []
+          expect(@scheduler._consecutiveImmediateRenders).to.deep.equal
+            app1: 0
+          expect(render).to.have.been.calledOnce
+          expect(render.args[0][0]).to.equal 'app1'
+          expect(render.args[0][1]).to.deep.equal
+            viewId: 'view-id'
+          done()
+
     it 'should fail when render fails', (done) ->
       render = sinon.stub @scheduler, '_render', ->
         promise.reject()

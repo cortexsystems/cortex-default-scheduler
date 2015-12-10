@@ -323,8 +323,9 @@ class DefaultScheduler
           continue
 
         for view, idx in views
-          if @_currentApp == app and \
-              view?.contentId == @_currentView?.contentId
+          if (@_currentApp == app) and \
+              (not not @_currentView?.contentId) and \
+              (view?.contentId == @_currentView?.contentId)
             @_stats?.immidiateViews?[app]?.preventDuplicates += 1
             continue
 
