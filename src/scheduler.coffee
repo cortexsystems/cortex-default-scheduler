@@ -141,6 +141,10 @@ class DefaultScheduler
     # Failed unique app count so far. When an app renders, this counter will
     # get reset.
     @_failedAppSlots      = 0
+    # Keep track of step start time for measurements.
+    @_stepStartTime       = 0
+    # Keep track of render start time for measurements.
+    @_renderStartTime     = 0
 
     @_stats =
       steps: 0
@@ -237,6 +241,9 @@ class DefaultScheduler
     @_runStep()
 
   _runStep: ->
+    startTime = new Date().getTime()
+    console.log "Last step took #{startTime - @_stepStartTime}msecs."
+    @_stepStartTime = startTime
     @_stats.steps += 1
 
     new promise (resolve, reject) =>
@@ -430,25 +437,29 @@ class DefaultScheduler
     return @_findView(app, queue, contentIds, index + 1)
 
   _render: (app, view) ->
+    startTime = new Date().getTime()
+    console.log "Last render took #{startTime - @_renderStartTime}msecs."
+    @_renderStartTime = startTime
+
     console.log "Rendering #{app}/#{view.contentId}/#{view.viewId}."
     st = new Date().getTime()
     new promise (resolve, reject) =>
       @_stats.apiCalls?.hideRenderShow?[app]?.active += 1
-      @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app
-        .then =>
-          @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
-          @_stats.apiCalls?.hideRenderShow?[app]?.success += 1
-          et = new Date().getTime()
-          console.log """#{app}/#{view.contentId}/#{view.viewId} rendered \
-            in #{et - st} msecs."""
-          @_currentApp = app
-          @_currentView = view
-          @_api.scheduler.trackView app, view.contentLabel
-          resolve()
-        .catch (e) =>
+      @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app, (err) =>
+        if err?
           @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
           @_stats.apiCalls?.hideRenderShow?[app]?.failure += 1
-          reject e
+          return reject err
+
+        @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
+        @_stats.apiCalls?.hideRenderShow?[app]?.success += 1
+        et = new Date().getTime()
+        console.log """#{app}/#{view.contentId}/#{view.viewId} rendered in \
+          #{et - st} msecs."""
+        @_currentApp = app
+        @_currentView = view
+        @_api.scheduler.trackView app, view.contentLabel
+        resolve()
 
   _prepareApps: ->
     for app, s of @_apps

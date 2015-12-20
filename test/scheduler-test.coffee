@@ -880,7 +880,7 @@ describe 'Scheduler', ->
   describe '#_render', ->
     it 'should make a hideRenderShow and render call', (done) ->
       @scheduler._currentApp = 'app2'
-      @hideRenderShow.returns new promise (resolve, reject) -> resolve()
+      @hideRenderShow.callsArgWith 3, undefined
       view =
         viewId: 'view-id'
         contentLabel: 'label'
@@ -897,7 +897,7 @@ describe 'Scheduler', ->
 
     it 'should set the current app when hideRenderShow succeeds', (done) ->
       @scheduler._currentApp = 'app2'
-      @hideRenderShow.returns new promise (resolve, reject) -> resolve()
+      @hideRenderShow.callsArgWith 3, undefined
       view =
         viewId: 'view-id'
       @scheduler._render 'app1', view
@@ -913,11 +913,13 @@ describe 'Scheduler', ->
       @scheduler._currentApp = 'app2'
       @scheduler._currentView =
         id: 'old-view'
-      @hideRenderShow.returns new promise (resolve, reject) -> reject()
+      err = new Error 'hideRenderShow error'
+      @hideRenderShow.callsArgWith 3, err
       view =
         viewId: 'view-id'
       @scheduler._render 'app1', view
-        .catch =>
+        .catch (e) =>
+          expect(e).to.equal err
           expect(@hideRenderShow).to.have.been.calledOnce
           expect(@hideRenderShow).to.have.been.calledWith(
             'app2', 'view-id', 'app1')
