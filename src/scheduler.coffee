@@ -124,7 +124,7 @@ class DefaultScheduler
     @_queues              = {}
     # Views submitted using requestFocus(). Scheduler will prioritize these
     # views over any view in @_queues.
-    # @_immediateViewsQueue = {
+    # @_immediateViewQueues = {
     #   'app1': [{viewId: 'v1'}, {viewId: 'v2', contentId: 'v2'}],
     #   'app2': [...]
     @_immediateViewQueues = {}
@@ -166,6 +166,7 @@ class DefaultScheduler
       immidiateViews: {}
       apiCalls:
         prepare: {}
+        discardView: {}
         requestFocus: {}
         hideRenderShow: {}
       appViews: {}
@@ -208,6 +209,7 @@ class DefaultScheduler
   _onAppCrash: (appId) =>
     console.log "Received an app crash: #{appId}"
     @_queues[appId] = "#{DEFAULT_KEY}": []
+    @_immediateViewQueues[appId] = []
     @_activePrepareCalls[appId] = 0
 
   _onRequestFocus: (app, view) =>
@@ -216,9 +218,10 @@ class DefaultScheduler
       return
 
     @_immediateViewQueues[app].push
-      viewId: view?.viewId
-      contentId: view?.contentId
+      viewId:       view?.viewId
+      contentId:    view?.contentId
       contentLabel: view?.contentLabel
+      expiration:   @_expirationTime(view?.ttl)
 
     @_stats.apiCalls?.requestFocus?[app]?.success += 1
 
@@ -249,6 +252,7 @@ class DefaultScheduler
 
     @_lastRunTime = new Date().getTime()
     @_prepareApps()
+    @_expireViews()
     @_runStep()
 
   _runStep: ->
@@ -456,6 +460,10 @@ class DefaultScheduler
     st = new Date().getTime()
     @_stats.apiCalls?.hideRenderShow?[app]?.active += 1
 
+    @_inProgressView =
+      appId:  app
+      viewId: view.viewId
+
     new promise (resolve, reject) =>
       fail = (err) =>
         @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
@@ -486,6 +494,50 @@ class DefaultScheduler
             return fail(err)
 
           success()
+
+  _expireViews: ->
+    now = new Date().getTime()
+    for appId, appQ of @_queues
+      if not appQ?
+        continue
+      @_queues[appId] = {}
+      for contentId, views of appQ
+        @_queues[appId][contentId] = []
+        for view in views
+          if @_isExpired(appId, view.viewId, view.expiration, now)
+            @_expire(appId, view.viewId)
+            continue
+
+          @_queues[appId][contentId].push view
+
+    for appId, appQ of @_immediateViewQueues
+      @_immediateViewQueues[appId] = []
+      for view in appQ
+        if @_isExpired(appId, view.viewId, view.expiration, now)
+          @_expire(appId, view.viewId)
+          continue
+
+        @_immediateViewQueues[appId].push view
+
+  _isExpired: (appId, viewId, expiration, now) ->
+    inProgress = appId == @_inProgressView?.appId and \
+      viewId == @_inProgressView?.viewId
+
+    expired = expiration? and expiration <= now and expiration > 0
+
+    expired and not inProgress
+
+  _expire: (appId, viewId) ->
+    @_stats.apiCalls.discardView[appId].active += 1
+    Cortex.scheduler.discardView appId, viewId
+      .then =>
+        @_stats.apiCalls.discardView[appId].active -= 1
+        @_stats.apiCalls.discardView[appId].success += 1
+      .catch (e) =>
+        @_stats.apiCalls.discardView[appId].active -= 1
+        @_stats.apiCalls.discardView[appId].failure += 1
+        console.warn "Scheduler failed to discard view. appId: #{appId}, " +
+          "viewId: #{viewId}", e
 
   _prepareApps: ->
     for app, s of @_apps
@@ -534,6 +586,7 @@ class DefaultScheduler
               viewId:       viewId
               contentId:    contentId
               contentLabel: contentLabel
+              expiration:   @_expirationTime(resp?.ttl)
           resolve()
         .catch (e) =>
           clearTimeout timer
@@ -551,6 +604,10 @@ class DefaultScheduler
         success: 0
         failure: 0
         timeout: 0
+        active:  0
+      @_stats.apiCalls.discardView[app] =
+        success: 0
+        failure: 0
         active:  0
       @_stats.apiCalls.requestFocus[app] =
         success: 0
@@ -586,6 +643,16 @@ class DefaultScheduler
         apps[app] = true
 
     apps
+
+  _expirationTime: (ttl) ->
+    if not ttl?
+      return 0
+
+    ttl = parseInt(ttl)
+    if isNaN(ttl) || ttl <= 0
+      return 0
+
+    return new Date().getTime() + ttl
 
 module.exports = {
   DefaultScheduler,

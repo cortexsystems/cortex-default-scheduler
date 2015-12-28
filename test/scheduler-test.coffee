@@ -40,11 +40,15 @@ describe 'Scheduler', ->
         'app-id':
           '__default': ['a', 'b']
           'other': ['c']
+      @scheduler._immediateViewQueues =
+        'app-id': ['a', 'b']
       @scheduler._activePrepareCalls = 'app-id': 10
       @scheduler._onAppCrash 'app-id'
       expect(@scheduler._queues).to.deep.equal
         'app-id':
           '__default': []
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        'app-id': []
       expect(@scheduler._activePrepareCalls['app-id']).to.equal 0
 
   describe '#_onRequestFocus', ->
@@ -79,24 +83,48 @@ describe 'Scheduler', ->
         app2: ['v']
       @scheduler._onRequestFocus 'app1', {viewId: 'v1'}
       expect(@scheduler._immediateViewQueues).to.deep.equal
-        app1: [{viewId: 'v1', contentId: undefined, contentLabel: undefined}]
+        app1: [{
+          viewId: 'v1',
+          contentId: undefined,
+          contentLabel: undefined,
+          expiration: 0}]
         app2: ['v']
 
       @scheduler._onRequestFocus 'app1', {viewId: 'v2', contentId: 'v2'}
       expect(@scheduler._immediateViewQueues).to.deep.equal
         app1: [
-          {viewId: 'v1', contentId: undefined, contentLabel: undefined}
-          {viewId: 'v2', contentId: 'v2', contentLabel: undefined}
+          {
+            viewId: 'v1',
+            contentId: undefined,
+            contentLabel: undefined,
+            expiration: 0}
+          {
+            viewId: 'v2',
+            contentId: 'v2',
+            contentLabel: undefined,
+            expiration: 0}
         ]
         app2: ['v']
       @scheduler._onRequestFocus 'app2', {
         viewId: 'v3', contentId: 'v3', contentLabel: 'v3'}
       expect(@scheduler._immediateViewQueues).to.deep.equal
         app1: [
-          {viewId: 'v1', contentId: undefined, contentLabel: undefined}
-          {viewId: 'v2', contentId: 'v2', contentLabel: undefined}
+          {
+            viewId: 'v1',
+            contentId: undefined,
+            contentLabel: undefined,
+            expiration: 0}
+          {
+            viewId: 'v2',
+            contentId: 'v2',
+            contentLabel: undefined,
+            expiration: 0}
         ]
-        app2: ['v', {viewId: 'v3', contentId: 'v3', contentLabel: 'v3'}]
+        app2: ['v', {
+          viewId: 'v3',
+          contentId: 'v3',
+          contentLabel: 'v3',
+          expiration: 0}]
 
   describe '#_onHealthCheck', ->
     it 'should succeed during the warmup period', ->
@@ -1051,9 +1079,10 @@ describe 'Scheduler', ->
           expect(@scheduler._queues.app).to.deep.equal
             __default: [
               {
-                viewId: 'view-id',
-                contentId: '__default',
+                viewId: 'view-id'
+                contentId: '__default'
                 contentLabel: undefined
+                expiration: 0
               }
             ]
           done()
@@ -1077,9 +1106,10 @@ describe 'Scheduler', ->
             __default: []
             'content-id': [
               {
-                viewId:       'view-id',
-                contentId:    'content-id',
+                viewId:       'view-id'
+                contentId:    'content-id'
                 contentLabel: 'label'
+                expiration:    0
               }
             ]
           done()
@@ -1122,3 +1152,164 @@ describe 'Scheduler', ->
         app4: true
       expect(@scheduler._totalAppSlots).to.equal 5
       expect(@scheduler._priorityAppIndex).to.deep.equal [0, 0, 0]
+
+  describe '#_expireViews', ->
+    it 'should expire app views', ->
+      expire = sinon.stub @scheduler, '_expire', promise.resolve
+      @scheduler._inProgressView =
+        appId: 'app2'
+        viewId: 'v5'
+
+      @scheduler._queues =
+        app:
+          __default: [{
+            viewId:       'v1'
+            contentId:    'v1-id'
+            contentLabel: 'v1-l'
+            expiration:   100}]
+          'content-id': [
+            {
+              viewId:       'v2'
+              contentId:    'v2-id'
+              contentLabel: 'v2-l'
+              expiration:    0},
+            {
+              viewId:       'v3'
+              contentId:    'v3-id'
+              contentLabel: 'v3-l'
+              expiration:    4000}]
+        app2:
+          __default: [{
+            viewId:       'v4'
+            contentId:    'v4-id'
+            contentLabel: 'v4-l'
+            expiration:   80}]
+          'other-content': [{
+            viewId:       'v5'
+            contentId:    'v5-id'
+            contentLabel: 'v5-l'
+            expiration:   40}]
+
+      @clock.tick(300)
+      @scheduler._expireViews()
+      expect(expire).to.have.been.calledTwice
+      args = expire.args
+      expect(args[0]).to.deep.equal ['app', 'v1']
+      expect(args[1]).to.deep.equal ['app2', 'v4']
+      expect(@scheduler._queues).to.deep.equal
+        app:
+          __default: []
+          'content-id': [
+            {
+              viewId:       'v2'
+              contentId:    'v2-id'
+              contentLabel: 'v2-l'
+              expiration:    0},
+            {
+              viewId:       'v3'
+              contentId:    'v3-id'
+              contentLabel: 'v3-l'
+              expiration:    4000}]
+        app2:
+          __default: []
+          'other-content': [{
+            viewId:       'v5'
+            contentId:    'v5-id'
+            contentLabel: 'v5-l'
+            expiration:   40}]
+
+    it 'should expire immediate views', ->
+      expire = sinon.stub @scheduler, '_expire', promise.resolve
+      @scheduler._inProgressView =
+        appId: 'app2'
+        viewId: 'v5'
+      @scheduler._immediateViewQueues =
+        app1: [
+          {
+            viewId: 'v1',
+            contentId: undefined,
+            contentLabel: undefined,
+            expiration: 0},
+          {
+            viewId: 'v2'
+            contentId: 'v2-id'
+            contentLabel: 'v2-l'
+            expiration: 50},
+          {
+            viewId: 'v3'
+            contentId: 'v3-id'
+            contentLabel: 'v3-l'
+            expiration: 500},
+          {
+            viewId: 'v4'
+            contentId: 'v4-id'
+            contentLabel: 'v4-l'}]
+        app2: [
+          {
+            viewId: 'v5'
+            expiration: 50},
+          {
+            viewId: 'v6'
+            expiration: 40},
+          {
+            viewId: 'v7'
+            expiration: 400}]
+        app3: []
+
+      @clock.tick(300)
+      @scheduler._expireViews()
+      expect(expire).to.have.been.calledTwice
+      args = expire.args
+      expect(args[0]).to.deep.equal ['app1', 'v2']
+      expect(args[1]).to.deep.equal ['app2', 'v6']
+      expect(@scheduler._immediateViewQueues).to.deep.equal
+        app1: [
+          {
+            viewId: 'v1',
+            contentId: undefined,
+            contentLabel: undefined,
+            expiration: 0},
+          {
+            viewId: 'v3'
+            contentId: 'v3-id'
+            contentLabel: 'v3-l'
+            expiration: 500},
+          {
+            viewId: 'v4'
+            contentId: 'v4-id'
+            contentLabel: 'v4-l'}]
+        app2: [
+          {
+            viewId: 'v5'
+            expiration: 50},
+          {
+            viewId: 'v7'
+            expiration: 400}]
+        app3: []
+
+  describe '#_isExpired', ->
+    it 'should return false when view is in progress', ->
+      @scheduler._inProgressView =
+        appId: 'app-id'
+        viewId: 'view-id'
+
+      expect(@scheduler._isExpired('app-id', 'view-id', 10, 30)).to.be.false
+
+    it 'should return false when view is not expired', ->
+      @scheduler._inProgressView =
+        appId: 'app-id'
+        viewId: 'view-id'
+
+      expect(@scheduler._isExpired('other', 'view-id', 40, 30)).to.be.false
+
+    it 'should return true when view is expired', ->
+      @scheduler._inProgressView =
+        appId: 'app-id'
+        viewId: 'view-id'
+
+      expect(@scheduler._isExpired('other', 'view-id', 10, 30)).to.be.true
+
+    it 'should work when inProgressView is not set', ->
+      expect(@scheduler._isExpired('a', 'v', 10, 30)).to.be.true
+      expect(@scheduler._isExpired('a', 'v', 40, 30)).to.be.false
+      expect(@scheduler._isExpired('a', 'v', undefined, 30)).to.be.false
