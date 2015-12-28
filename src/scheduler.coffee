@@ -1,4 +1,5 @@
 promise = require 'promise'
+semver  = require 'semver'
 
 DEFAULT_KEY                       = '__default'
 BLACK_SCREEN                      = '__bs'
@@ -94,7 +95,17 @@ MAX_IMMEDIATE_VIEWS_PER_APP       = 3
 # Immediate views are also subject to duplicate content prevention.
 #
 class DefaultScheduler
-  constructor: (@_bufferedViewsPerApp) ->
+  constructor: (@_bufferedViewsPerApp, @_playerVersion) ->
+    # Cortex player has a breaking API change as of 2.4.0. The scheduler should
+    # rely on node style callbacks when using Cortex.scheduler.hideRenderShow()
+    # for performance reasons. On older players, the scheduler should use the
+    # returned promise.
+    #
+    # TODO(hkaya): Remove this logic when all players are upgraded to 2.4.0.
+    @_shouldUsePromises = semver.lt(@_playerVersion, '2.4.0')
+    console.warn "Cortex.scheduler.hideRenderShow will use promise: " +
+      "#{@_shouldUsePromises}"
+
     # The last successfully rendered app.
     @_currentApp          = undefined
     # The last successfully rendered view.
@@ -443,14 +454,15 @@ class DefaultScheduler
 
     console.log "Rendering #{app}/#{view.contentId}/#{view.viewId}."
     st = new Date().getTime()
-    new promise (resolve, reject) =>
-      @_stats.apiCalls?.hideRenderShow?[app]?.active += 1
-      @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app, (err) =>
-        if err?
-          @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
-          @_stats.apiCalls?.hideRenderShow?[app]?.failure += 1
-          return reject err
+    @_stats.apiCalls?.hideRenderShow?[app]?.active += 1
 
+    new promise (resolve, reject) =>
+      fail = (err) =>
+        @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
+        @_stats.apiCalls?.hideRenderShow?[app]?.failure += 1
+        reject err
+
+      success = =>
         @_stats.apiCalls?.hideRenderShow?[app]?.active -= 1
         @_stats.apiCalls?.hideRenderShow?[app]?.success += 1
         et = new Date().getTime()
@@ -460,6 +472,20 @@ class DefaultScheduler
         @_currentView = view
         @_api.scheduler.trackView app, view.contentLabel
         resolve()
+
+      if @_shouldUsePromises
+        # use promises
+        @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app
+          .then success
+          .catch fail
+
+      else
+        # use callback
+        @_api.scheduler.hideRenderShow @_currentApp, view.viewId, app, (err) =>
+          if err?
+            return fail(err)
+
+          success()
 
   _prepareApps: ->
     for app, s of @_apps

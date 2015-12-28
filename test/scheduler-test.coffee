@@ -26,7 +26,9 @@ describe 'Scheduler', ->
         hideRenderShow: @hideRenderShow
         trackView: @trackView
     @clock = sinon.useFakeTimers()
-    @scheduler = new DefaultScheduler @bufferedViewsPerApp
+    # Use 2.4.0+ to test the callback version of
+    # Cortex.scheduler.hideRenderShow()
+    @scheduler = new DefaultScheduler @bufferedViewsPerApp, "2.4.0"
     @scheduler._api = @api
 
   afterEach ->
@@ -925,6 +927,27 @@ describe 'Scheduler', ->
             'app2', 'view-id', 'app1')
           expect(@scheduler._currentApp).to.equal 'app2'
           expect(@scheduler._currentView).to.deep.equal id: 'old-view'
+          done()
+
+    it 'should use the promise version of hideRenderShow for players older \
+        than 2.4.0', (done) ->
+      scheduler = new DefaultScheduler @bufferedViewsPerApp, '2.0.0'
+      scheduler._api = @api
+
+      scheduler._currentApp = 'app2'
+      @hideRenderShow.returns promise.resolve()
+      view =
+        viewId: 'view-id'
+        contentLabel: 'label'
+      scheduler._render 'app1', view
+        .then =>
+          expect(@hideRenderShow).to.have.been.calledOnce
+          expect(@hideRenderShow).to.have.been.calledWith(
+            'app2', 'view-id', 'app1')
+          expect(@trackView).to.have.been.calledOnce
+          expect(@trackView).to.have.been.calledWith 'app1', 'label'
+          expect(scheduler._currentApp).to.equal 'app1'
+          expect(scheduler._currentView).to.deep.equal view
           done()
 
   describe '#_prepareApps', ->
